@@ -55,14 +55,14 @@ def analyze_sentiment(text):
         "apocalypse", "disaster", "crisis", "catastrophe", "threat",
         "terror", "violence", "fear", "destruction", "chaos", "danger",
         "terrible", "atrocious", "calamity", "tragedy", "carnage", 'murder',
-        "war", "menace", "critical"
+        "war", "menace", "critical", "attack", "attacks", "devastating"
     ]
 
     negative = [
         "despair", "suffering", "misery", "anguish", "pain",
         "grief", "sadness", "melancholy", "depression", "anxiety",
         "issue", "problem", "bad", "vulnerable", "sad", "concern",
-        "concerning", "worried"
+        "concerning", "worried", "dead", "death"
     ]
 
     neutral = [
@@ -73,7 +73,8 @@ def analyze_sentiment(text):
     positive = [
         "hope", "comfort", "relief", "contentment", "satisfaction",
         "joy", "happiness", "love", "excitement", "enthusiasm", "good",
-        "agreement", "effort", "happy", "hopeful", "proud"
+        "agreement", "effort", "happy", "hopeful", "proud", "hope"
+        "hopeful", "support", "efforts"
     ]
 
     optimistic = [

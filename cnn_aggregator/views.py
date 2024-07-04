@@ -1,4 +1,5 @@
 from django.views.decorators.csrf import csrf_exempt
+from django.views.generic.detail import DetailView
 from .utils import retrieve_cnn_homepage
 from django.http import JsonResponse
 from django.shortcuts import render
@@ -68,3 +69,47 @@ def sync_cnn(request):
     retrieve_cnn_homepage()
     print("Done!")
     return JsonResponse({"status": "success"})
+
+class ArticleDetailView(DetailView):
+    model = Article
+    template_name = 'article_detail.html'
+    context_object_name = 'article'
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        
+        context["disturbing"] = [
+            "apocalypse", "disaster", "crisis", "catastrophe", "threat",
+            "terror", "violence", "fear", "destruction", "chaos", "danger",
+            "terrible", "atrocious", "calamity", "tragedy", "carnage", 'murder',
+            "war", "menace", "critical", "attack", "attacks", "devastating"
+        ]
+
+        context["negative"] = [
+            "despair", "suffering", "misery", "anguish", "pain",
+            "grief", "sadness", "melancholy", "depression", "anxiety",
+            "issue", "problem", "bad", "vulnerable", "sad", "concern",
+            "concerning", "worried", "dead", "death"
+        ]
+
+        context["neutral"] = [
+            "routine", "commonplace", "ordinary", "standard", "typical",
+            "usual", "unremarkable", "mundane", "average", "common", "boring"
+        ]
+
+        context["positive"] = [
+            "hope", "comfort", "relief", "contentment", "satisfaction",
+            "joy", "happiness", "love", "excitement", "enthusiasm", "good",
+            "agreement", "effort", "happy", "hopeful", "proud", "life", "hope", 
+            "hopeful", "support", "efforts"
+        ]
+
+        context["optimistic"] = [
+            "potential", "prosperity", "success", "wonderful", "perfect", 
+            "achievement", "growth", "fulfillment", "bliss", "euphoria", "peace",
+            "extasis", "successful", "greatness", "incredible"
+        ]
+
+        context["words"] = self.object.content.split(" ")
+
+        return context
