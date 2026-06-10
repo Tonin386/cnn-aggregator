@@ -2,10 +2,15 @@ import time
 from datetime import date, timedelta
 
 from django.core.management.base import BaseCommand
+from django.db.models import Max
 from django.utils import timezone
 
-from cnn_aggregator.models import WorkerLog, WorkerState
-from cnn_aggregator.utils import retrieve_cnn_articles_for_date
+from cnn_aggregator.models import Article, WorkerLog, WorkerState
+from cnn_aggregator.utils import (
+    cnn_article_sitemap_index_urls,
+    cnn_article_urls_from_sitemap,
+    retrieve_cnn_articles_for_date,
+)
 
 
 class Command(BaseCommand):
@@ -16,6 +21,18 @@ class Command(BaseCommand):
         parser.add_argument("--once", action="store_true", help="Process one day and exit.")
         parser.add_argument("--sleep", type=float, default=3.0, help="Seconds to sleep between days.")
         parser.add_argument("--limit-per-day", type=int, default=None, help="Maximum URLs to fetch per day.")
+        parser.add_argument(
+            "--freshness-interval",
+            type=float,
+            default=300.0,
+            help="Seconds between checks for articles newer than the latest stored article. Use 0 to disable.",
+        )
+        parser.add_argument(
+            "--freshness-window-days",
+            type=int,
+            default=3,
+            help="Maximum number of recent publication dates to rescan during freshness checks.",
+        )
 
     def handle(self, *args, **options):
         state = WorkerState.get_solo()
@@ -31,6 +48,8 @@ class Command(BaseCommand):
         state.save()
 
         self._log(state, f"CNN worker started on {current_date.isoformat()}", WorkerLog.LEVEL_SUCCESS)
+        last_freshness_check = timezone.now()
+        self._check_fresh_articles(state, options)
 
         while True:
             state.refresh_from_db()
@@ -39,6 +58,14 @@ class Command(BaseCommand):
                 return
 
             try:
+                if self._freshness_check_due(last_freshness_check, options["freshness_interval"]):
+                    self._check_fresh_articles(state, options)
+                    last_freshness_check = timezone.now()
+                    state.refresh_from_db()
+                    if state.stop_requested:
+                        self._mark_idle(state, "Stop requested. Worker is idle.")
+                        return
+
                 state.status = WorkerState.STATUS_RUNNING
                 state.current_date = current_date
                 state.heartbeat_at = timezone.now()
@@ -112,3 +139,85 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(message))
         else:
             self.stdout.write(message)
+
+    def _freshness_check_due(self, last_freshness_check, interval_seconds):
+        if not interval_seconds or interval_seconds <= 0:
+            return False
+        return (timezone.now() - last_freshness_check).total_seconds() >= interval_seconds
+
+    def _latest_article_date(self):
+        return (
+            Article.objects
+            .exclude(published_date__isnull=True)
+            .aggregate(value=Max("published_date"))["value"]
+        )
+
+    def _freshness_dates(self, window_days):
+        today = date.today()
+        latest_date = self._latest_article_date() or today
+        start_date = min(latest_date, today)
+        max_days = max(window_days or 1, 1)
+        dates = []
+
+        cursor = today
+        while cursor >= start_date and len(dates) < max_days:
+            dates.append(cursor)
+            cursor -= timedelta(days=1)
+
+        return dates, latest_date
+
+    def _clear_sitemap_caches(self):
+        cnn_article_sitemap_index_urls.cache_clear()
+        cnn_article_urls_from_sitemap.cache_clear()
+
+    def _check_fresh_articles(self, state, options):
+        dates_to_scan, latest_date = self._freshness_dates(options["freshness_window_days"])
+        self._clear_sitemap_caches()
+        self._log(
+            state,
+            (
+                "Freshness check started: "
+                f"latest stored article date is {latest_date.isoformat()}, "
+                f"rescanning {len(dates_to_scan)} recent day(s)."
+            ),
+        )
+
+        for target_date in dates_to_scan:
+            state.refresh_from_db()
+            if state.stop_requested:
+                return
+
+            state.status = WorkerState.STATUS_RUNNING
+            state.current_date = target_date
+            state.heartbeat_at = timezone.now()
+            state.last_message = f"Checking for fresh articles on {target_date.isoformat()}"
+            state.save()
+            self._log(state, state.last_message)
+
+            stats = retrieve_cnn_articles_for_date(
+                target_date,
+                limit=options.get("limit_per_day"),
+                log_callback=lambda message, level=WorkerLog.LEVEL_INFO: self._log(
+                    state,
+                    message,
+                    level,
+                ),
+            )
+
+            state.refresh_from_db()
+            state.total_seen += stats["seen"]
+            state.total_created += stats["created"]
+            state.total_updated += stats["updated"]
+            state.heartbeat_at = timezone.now()
+            state.last_message = (
+                f"Freshness {target_date.isoformat()}: "
+                f"{stats['discovered']} discovered, {stats['created']} new, "
+                f"{stats['updated']} updated, {stats['skipped']} skipped, "
+                f"{stats['errors']} errors."
+            )
+            if stats["errors"] == 0:
+                state.last_error = ""
+            state.save()
+
+            level = WorkerLog.LEVEL_WARNING if stats["errors"] else WorkerLog.LEVEL_SUCCESS
+            self._log(state, state.last_message, level)

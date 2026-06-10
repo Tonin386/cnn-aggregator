@@ -49,6 +49,63 @@
             </div>
         </section>
 
+        <section class="mt-5 rounded-lg border border-slate-700 bg-slate-900">
+            <div class="border-b border-slate-700 px-5 py-4">
+                <h2 class="text-lg font-semibold text-white">Mots qui influencent le score</h2>
+                <p class="mt-1 text-sm text-slate-400">Les répétitions ont un poids décroissant dans la contribution totale.</p>
+            </div>
+            {% if sentiment_contributions %}
+            <div class="overflow-x-auto">
+                <table class="w-full min-w-[760px] text-left text-sm">
+                    <thead class="bg-slate-950/70 text-xs uppercase text-slate-400">
+                        <tr>
+                            <th class="px-5 py-3 font-semibold">Terme</th>
+                            <th class="px-4 py-3 font-semibold">Type</th>
+                            <th class="px-4 py-3 text-right font-semibold">Occurrences</th>
+                            <th class="px-4 py-3 text-right font-semibold">Poids retenu</th>
+                            <th class="px-4 py-3 text-right font-semibold">Score moyen</th>
+                            <th class="px-4 py-3 text-right font-semibold">Contribution</th>
+                            <th class="px-5 py-3 font-semibold">Contexte</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-800">
+                        {% for item in sentiment_contributions %}
+                        <tr class="hover:bg-slate-800/45">
+                            <td class="px-5 py-3 font-semibold text-slate-100">{{ item.term }}</td>
+                            <td class="px-4 py-3 text-slate-300">{{ item.kind }}</td>
+                            <td class="px-4 py-3 text-right tabular-nums text-slate-300">{{ item.occurrences }}</td>
+                            <td class="px-4 py-3 text-right tabular-nums text-slate-300">{{ item.total_weight|floatformat:2 }}</td>
+                            <td class="px-4 py-3 text-right tabular-nums text-slate-300">{{ item.average_score|floatformat:3 }}</td>
+                            <td class="px-4 py-3 text-right tabular-nums">
+                                {% if item.contribution > 0 %}
+                                <span class="font-semibold text-emerald-300">+{{ item.contribution|floatformat:3 }}</span>
+                                {% elif item.contribution < 0 %}
+                                <span class="font-semibold text-rose-300">{{ item.contribution|floatformat:3 }}</span>
+                                {% else %}
+                                <span class="text-slate-400">{{ item.contribution|floatformat:3 }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-5 py-3">
+                                {% if item.modifiers %}
+                                <div class="flex flex-wrap gap-1.5">
+                                    {% for modifier in item.modifiers %}
+                                    <span class="rounded bg-cyan-500/15 px-2 py-1 text-xs font-semibold text-cyan-200">{{ modifier }}</span>
+                                    {% endfor %}
+                                </div>
+                                {% else %}
+                                <span class="text-slate-500">-</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="px-5 py-6 text-sm text-slate-400">Aucun mot du dictionnaire de sentiment n'a été détecté dans cet article.</div>
+            {% endif %}
+        </section>
+
         <article class="mt-5 rounded-lg border border-slate-700 bg-slate-900 p-5 leading-8 text-slate-200">
             {% for word in words %}
                 {% if word in disturbing %}

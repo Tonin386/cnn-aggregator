@@ -7,7 +7,7 @@ from django.http import JsonResponse
 from django.shortcuts import render
 import plotly.graph_objs as go
 import plotly.offline as pyo
-from .utils import article_highlight_word_groups
+from .utils import article_highlight_word_groups, sentiment_contributions
 from .models import Article, WorkerLog, WorkerState
 from datetime import timedelta
 import os
@@ -284,5 +284,8 @@ class ArticleDetailView(DetailView):
         context = super().get_context_data(**kwargs)
         context.update(article_highlight_word_groups())
         context["words"] = self.object.content.split(" ")
+        context["sentiment_contributions"] = sentiment_contributions(
+            f"{self.object.title}. {self.object.content}"
+        )
 
         return context

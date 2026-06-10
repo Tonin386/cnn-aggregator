@@ -17,9 +17,19 @@
                 <h1 class="mt-1 text-2xl font-semibold text-white sm:text-3xl">Actualités disponibles</h1>
                 <p class="mt-1 text-sm text-slate-400">Articles en base, actualisés par le worker en arrière-plan.</p>
             </div>
-            <a href="{% url 'worker-dashboard' %}" class="inline-flex min-h-10 items-center justify-center rounded-lg border border-cyan-400/50 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/10 focus:outline-none focus:ring-2 focus:ring-cyan-300">
-                Dashboard worker
-            </a>
+            <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div class="inline-flex min-h-10 items-center gap-3 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2">
+                    <label class="inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-200" for="auto-refresh-toggle">
+                        <input id="auto-refresh-toggle" type="checkbox" class="peer sr-only">
+                        <span class="relative h-5 w-9 rounded-full bg-slate-700 transition after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-slate-300 after:transition peer-checked:bg-cyan-500 peer-checked:after:translate-x-4 peer-checked:after:bg-white"></span>
+                        Auto-refresh
+                    </label>
+                    <span id="auto-refresh-status" class="min-w-24 text-right text-xs tabular-nums text-slate-400">désactivé</span>
+                </div>
+                <a href="{% url 'worker-dashboard' %}" class="inline-flex min-h-10 items-center justify-center rounded-lg border border-cyan-400/50 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/10 focus:outline-none focus:ring-2 focus:ring-cyan-300">
+                    Dashboard worker
+                </a>
+            </div>
         </div>
     </header>
 
@@ -158,5 +168,79 @@
         </nav>
         {% endif %}
     </main>
+    <script>
+        (() => {
+            const refreshEverySeconds = 10;
+            const storageKey = "cnnAggregatorAutoRefresh";
+            const toggle = document.getElementById("auto-refresh-toggle");
+            const status = document.getElementById("auto-refresh-status");
+            let timer = null;
+            let secondsLeft = refreshEverySeconds;
+
+            const isEnabled = () => localStorage.getItem(storageKey) === "1";
+
+            const updateStatus = () => {
+                if (!isEnabled()) {
+                    status.textContent = "désactivé";
+                    return;
+                }
+                if (document.hidden) {
+                    status.textContent = "en pause";
+                    return;
+                }
+                status.textContent = `${secondsLeft}s`;
+            };
+
+            const stopTimer = () => {
+                if (timer) {
+                    clearInterval(timer);
+                    timer = null;
+                }
+            };
+
+            const startTimer = () => {
+                stopTimer();
+                secondsLeft = refreshEverySeconds;
+                updateStatus();
+                timer = setInterval(() => {
+                    if (!isEnabled() || document.hidden) {
+                        updateStatus();
+                        return;
+                    }
+                    secondsLeft -= 1;
+                    if (secondsLeft <= 0) {
+                        window.location.reload();
+                        return;
+                    }
+                    updateStatus();
+                }, 1000);
+            };
+
+            const syncAutoRefresh = () => {
+                toggle.checked = isEnabled();
+                if (toggle.checked) {
+                    startTimer();
+                } else {
+                    stopTimer();
+                    updateStatus();
+                }
+            };
+
+            toggle.addEventListener("change", () => {
+                localStorage.setItem(storageKey, toggle.checked ? "1" : "0");
+                syncAutoRefresh();
+            });
+
+            document.addEventListener("visibilitychange", () => {
+                if (!document.hidden && isEnabled()) {
+                    startTimer();
+                    return;
+                }
+                updateStatus();
+            });
+
+            syncAutoRefresh();
+        })();
+    </script>
 </body>
 </html>

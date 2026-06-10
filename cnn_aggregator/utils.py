@@ -195,7 +195,91 @@ def mojibake_score(text):
 
 def repeated_term_weight(term_counts, term):
     term_counts[term] = term_counts.get(term, 0) + 1
-    return 1 / np.sqrt(term_counts[term])
+    return 1 / term_counts[term]
+
+def clean_phrase_pattern(pattern):
+    return pattern.replace("\\b", "").replace("\\", "").strip()
+
+def add_sentiment_contribution(contributions, term, kind, score, weight, modifiers=None):
+    entry = contributions.setdefault(
+        f"{kind}:{term}",
+        {
+            "term": term,
+            "kind": kind,
+            "occurrences": 0,
+            "total_weight": 0.0,
+            "base_score_total": 0.0,
+            "contribution": 0.0,
+            "modifiers": set(),
+        },
+    )
+    entry["occurrences"] += 1
+    entry["total_weight"] += weight
+    entry["base_score_total"] += score
+    entry["contribution"] += score * weight
+    if modifiers:
+        entry["modifiers"].update(modifiers)
+
+def sentiment_contributions(text, limit=30):
+    if not text or not text.strip():
+        return []
+
+    normalized_text = re.sub(r"\s+", " ", text).strip()
+    normalized_text_lower = normalized_text.lower()
+    tokens = WORD_PATTERN.findall(normalized_text_lower)
+    term_counts = {}
+    contributions = {}
+
+    for pattern, score in NEWS_PHRASE_LEXICON.items():
+        occurrences = len(re.findall(pattern, normalized_text_lower))
+        for _ in range(occurrences):
+            weight = repeated_term_weight(term_counts, f"phrase:{pattern}")
+            add_sentiment_contribution(
+                contributions,
+                clean_phrase_pattern(pattern),
+                "phrase",
+                score,
+                weight,
+            )
+
+    for index, token in enumerate(tokens):
+        if token not in SENTIMENT_LEXICON:
+            continue
+
+        score = SENTIMENT_LEXICON[token]
+        previous_tokens = tokens[max(0, index - 3):index]
+        modifiers = []
+
+        if any(previous in NEGATIONS for previous in previous_tokens):
+            score *= -0.7
+            modifiers.append("negation")
+
+        for previous in previous_tokens:
+            if previous in INTENSIFIERS:
+                score *= INTENSIFIERS[previous]
+                modifiers.append(previous)
+            if previous in DIMINISHERS:
+                score *= DIMINISHERS[previous]
+                modifiers.append(previous)
+
+        weight = repeated_term_weight(term_counts, f"word:{token}")
+        add_sentiment_contribution(contributions, token, "mot", score, weight, modifiers)
+
+    rows = []
+    for entry in contributions.values():
+        occurrences = max(entry["occurrences"], 1)
+        rows.append({
+            "term": entry["term"],
+            "kind": entry["kind"],
+            "occurrences": entry["occurrences"],
+            "total_weight": entry["total_weight"],
+            "average_weight": entry["total_weight"] / occurrences,
+            "average_score": entry["base_score_total"] / occurrences,
+            "contribution": entry["contribution"],
+            "modifiers": sorted(entry["modifiers"]),
+        })
+
+    return sorted(rows, key=lambda row: abs(row["contribution"]), reverse=True)[:limit]
 
 def read_article(article_html):
     title_tag = article_html.find('h1')
