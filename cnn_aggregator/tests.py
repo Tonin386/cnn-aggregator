@@ -1,11 +1,18 @@
 from datetime import date, timedelta
+from unittest.mock import patch
 
-from django.test import SimpleTestCase, TestCase
+from django.test import Client, SimpleTestCase, TestCase
 
 from cnn_aggregator.management.commands.run_cnn_worker import Command
 
-from .models import Article
-from .utils import analyze_sentiment, repeated_term_weight, sentiment_contributions
+from .models import Article, WorkerState
+from .utils import (
+    analyze_sentiment,
+    classify_subjectivity,
+    repeated_term_weight,
+    sentiment_contributions,
+)
+from .views import apply_article_filters
 
 
 class SentimentAnalysisTests(SimpleTestCase):
@@ -41,6 +48,26 @@ class SentimentAnalysisTests(SimpleTestCase):
         self.assertEqual(protected["occurrences"], 3)
         self.assertLess(protected["total_weight"], 3)
         self.assertGreater(protected["contribution"], 0)
+
+    def test_subjectivity_is_lower_for_sourced_factual_copy(self):
+        _, factual_subjectivity = analyze_sentiment(
+            "According to court documents, officials said 42 percent of records "
+            "were reviewed in a public report. Police said witnesses testified in a statement."
+        )
+        _, opinion_subjectivity = analyze_sentiment(
+            "Critics say the plan is outrageous and clearly terrible. It might have "
+            "devastating consequences and should have been stopped, some believe."
+        )
+
+        self.assertLess(factual_subjectivity, 0.25)
+        self.assertGreater(opinion_subjectivity, 0.55)
+        self.assertGreater(opinion_subjectivity, factual_subjectivity)
+
+    def test_subjectivity_classification_uses_model_calibrated_thresholds(self):
+        self.assertEqual(classify_subjectivity(0.2999), "Objectif")
+        self.assertEqual(classify_subjectivity(0.30), "Insuffisamment objectif")
+        self.assertEqual(classify_subjectivity(0.4999), "Insuffisamment objectif")
+        self.assertEqual(classify_subjectivity(0.50), "Subjectif")
 
 
 class WorkerFreshnessTests(TestCase):
@@ -78,3 +105,83 @@ class WorkerFreshnessTests(TestCase):
         self.assertEqual(stored_latest_date, latest_date)
         self.assertEqual(len(dates), 3)
         self.assertEqual(dates[0], date.today())
+
+    def test_worker_rescores_existing_articles(self):
+        article = Article.objects.create(
+            title="Outrageous plan",
+            topic="world",
+            content="Critics say the plan is outrageous and clearly terrible.",
+            polarity=0,
+            subjectivity=0,
+            source="https://example.com/rescore",
+            published_date=date.today(),
+        )
+        state = WorkerState.get_solo()
+
+        Command()._rescore_existing_articles(state)
+
+        article.refresh_from_db()
+        self.assertNotEqual(article.polarity, 0)
+        self.assertGreater(article.subjectivity, 0)
+
+    @patch("cnn_aggregator.views.subprocess.Popen")
+    def test_dashboard_can_start_rescore_only_worker(self, popen):
+        response = Client(SERVER_NAME="localhost").post("/worker/rescore/")
+
+        self.assertEqual(response.status_code, 200)
+        command = popen.call_args.args[0]
+        self.assertIn("--rescore-existing", command)
+        self.assertIn("--once", command)
+
+    @patch("cnn_aggregator.views.subprocess.Popen")
+    def test_dashboard_can_start_rescore_then_continue_worker(self, popen):
+        response = Client(SERVER_NAME="localhost").post("/worker/rescore/?continue=1")
+
+        self.assertEqual(response.status_code, 200)
+        command = popen.call_args.args[0]
+        self.assertIn("--rescore-existing", command)
+        self.assertNotIn("--once", command)
+
+
+class ArticleFilterTests(TestCase):
+    def test_subjectivity_filters_use_three_labels(self):
+        objective = Article.objects.create(
+            title="Objective article",
+            topic="world",
+            content="According to documents.",
+            polarity=0,
+            subjectivity=0.2,
+            source="https://example.com/objective",
+            published_date=date.today(),
+        )
+        insufficient = Article.objects.create(
+            title="Mixed article",
+            topic="world",
+            content="Mixed signals.",
+            polarity=0,
+            subjectivity=0.4,
+            source="https://example.com/mixed",
+            published_date=date.today(),
+        )
+        subjective = Article.objects.create(
+            title="Subjective article",
+            topic="world",
+            content="Critics say it is outrageous.",
+            polarity=0,
+            subjectivity=0.6,
+            source="https://example.com/subjective",
+            published_date=date.today(),
+        )
+
+        self.assertQuerySetEqual(
+            apply_article_filters(Article.objects.all(), {"subjectivity": "objective"}),
+            [objective],
+        )
+        self.assertQuerySetEqual(
+            apply_article_filters(Article.objects.all(), {"subjectivity": "insufficient"}),
+            [insufficient],
+        )
+        self.assertQuerySetEqual(
+            apply_article_filters(Article.objects.all(), {"subjectivity": "subjective"}),
+            [subjective],
+        )

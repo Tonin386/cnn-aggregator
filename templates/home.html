@@ -37,19 +37,32 @@
         <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
                 <p class="text-sm text-slate-400">Articles filtrés</p>
-                <p class="mt-2 text-3xl font-semibold text-white">{{ total_articles }}</p>
+                <div class="mt-2 flex items-baseline gap-2">
+                    <p class="text-3xl font-semibold text-white">{{ total_articles }}</p>
+                    <span id="delta-filtered-articles" class="hidden rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums"></span>
+                </div>
+                <p id="delta-worker-activity" class="mt-2 hidden text-xs text-slate-400"></p>
             </div>
             <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
                 <p class="text-sm text-slate-400">Topics</p>
-                <p class="mt-2 text-3xl font-semibold text-white">{{ total_topics }}</p>
+                <div class="mt-2 flex items-baseline gap-2">
+                    <p class="text-3xl font-semibold text-white">{{ total_topics }}</p>
+                    <span id="delta-topics" class="hidden rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums"></span>
+                </div>
             </div>
             <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
                 <p class="text-sm text-slate-400">Polarité moyenne</p>
-                <p class="mt-2 text-3xl font-semibold text-amber-200">{{ avg_polarity|floatformat:2 }}</p>
+                <div class="mt-2 flex items-baseline gap-2">
+                    <p class="text-3xl font-semibold text-amber-200">{{ avg_polarity|floatformat:4 }}</p>
+                    <span id="delta-polarity" class="hidden rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums"></span>
+                </div>
             </div>
             <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
                 <p class="text-sm text-slate-400">Subjectivité moyenne</p>
-                <p class="mt-2 text-3xl font-semibold text-violet-200">{{ avg_subjectivity|floatformat:2 }}</p>
+                <div class="mt-2 flex items-baseline gap-2">
+                    <p class="text-3xl font-semibold text-violet-200">{{ avg_subjectivity|floatformat:4 }}</p>
+                    <span id="delta-subjectivity" class="hidden rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums"></span>
+                </div>
             </div>
         </section>
 
@@ -81,8 +94,9 @@
                     <label class="mb-1 block text-sm font-medium text-slate-300" for="subjectivity">Objectivité</label>
                     <select id="subjectivity" name="subjectivity" class="block min-h-10 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/30">
                         <option value="">Toutes</option>
-                        <option value="objective" {% if request.GET.subjectivity == "objective" %}selected{% endif %}>Objective</option>
-                        <option value="subjective" {% if request.GET.subjectivity == "subjective" %}selected{% endif %}>Subjective</option>
+                        <option value="objective" {% if request.GET.subjectivity == "objective" %}selected{% endif %}>Objectif</option>
+                        <option value="insufficient" {% if request.GET.subjectivity == "insufficient" %}selected{% endif %}>Insuffisamment objectif</option>
+                        <option value="subjective" {% if request.GET.subjectivity == "subjective" %}selected{% endif %}>Subjectif</option>
                     </select>
                 </div>
                 <div class="xl:col-span-1">
@@ -125,16 +139,18 @@
             <article class="flex min-h-[220px] flex-col rounded-lg border border-slate-700 bg-slate-900">
                 <div class="flex flex-wrap gap-2 border-b border-slate-700 p-3">
                     {% if bounds.0 <= article.polarity and article.polarity <= bounds.1 %}
-                    <span class="rounded-full bg-rose-500/15 px-3 py-1 text-xs font-semibold text-rose-200">Négatif {{ article.polarity|floatformat:2 }}</span>
+                    <span class="rounded-full bg-rose-500/15 px-3 py-1 text-xs font-semibold text-rose-200">Négatif {{ article.polarity|floatformat:4 }}</span>
                     {% elif bounds.1 < article.polarity and article.polarity <= bounds.2 %}
-                    <span class="rounded-full bg-slate-500/15 px-3 py-1 text-xs font-semibold text-slate-200">Neutre {{ article.polarity|floatformat:2 }}</span>
+                    <span class="rounded-full bg-slate-500/15 px-3 py-1 text-xs font-semibold text-slate-200">Neutre {{ article.polarity|floatformat:4 }}</span>
                     {% else %}
-                    <span class="rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-200">Positif {{ article.polarity|floatformat:2 }}</span>
+                    <span class="rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-200">Positif {{ article.polarity|floatformat:4 }}</span>
                     {% endif %}
-                    {% if article.subjectivity < 0.4 %}
-                    <span class="rounded-full bg-cyan-500/15 px-3 py-1 text-xs font-semibold text-cyan-200">Objectif {{ article.subjectivity|floatformat:2 }}</span>
+                    {% if article.subjectivity < subjectivity_objective_threshold %}
+                    <span class="rounded-full bg-sky-500/15 px-3 py-1 text-xs font-semibold text-sky-200">Objectif {{ article.subjectivity|floatformat:4 }}</span>
+                    {% elif article.subjectivity < subjectivity_subjective_threshold %}
+                    <span class="rounded-full bg-violet-500/15 px-3 py-1 text-xs font-semibold text-violet-200">Insuffisamment objectif {{ article.subjectivity|floatformat:4 }}</span>
                     {% else %}
-                    <span class="rounded-full bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-200">Subjectif {{ article.subjectivity|floatformat:2 }}</span>
+                    <span class="rounded-full bg-rose-500/15 px-3 py-1 text-xs font-semibold text-rose-200">Subjectif {{ article.subjectivity|floatformat:4 }}</span>
                     {% endif %}
                 </div>
                 <div class="flex flex-1 flex-col p-4">
@@ -168,12 +184,20 @@
         </nav>
         {% endif %}
     </main>
+    {{ refresh_snapshot|json_script:"refresh-snapshot" }}
     <script>
         (() => {
             const refreshEverySeconds = 10;
             const storageKey = "cnnAggregatorAutoRefresh";
+            const snapshotStorageKey = `cnnAggregatorSnapshot:${window.location.pathname}${window.location.search}`;
             const toggle = document.getElementById("auto-refresh-toggle");
             const status = document.getElementById("auto-refresh-status");
+            const deltaFilteredArticles = document.getElementById("delta-filtered-articles");
+            const deltaTopics = document.getElementById("delta-topics");
+            const deltaPolarity = document.getElementById("delta-polarity");
+            const deltaSubjectivity = document.getElementById("delta-subjectivity");
+            const deltaWorkerActivity = document.getElementById("delta-worker-activity");
+            const currentSnapshot = JSON.parse(document.getElementById("refresh-snapshot").textContent);
             let timer = null;
             let secondsLeft = refreshEverySeconds;
 
@@ -239,6 +263,79 @@
                 updateStatus();
             });
 
+            const formatSignedInteger = (value) => {
+                if (value > 0) {
+                    return `+${value}`;
+                }
+                return `${value}`;
+            };
+
+            const formatSignedScore = (value) => {
+                if (value > 0) {
+                    return `+${value.toFixed(4)}`;
+                }
+                return value.toFixed(4);
+            };
+
+            const deltaClass = (value) => {
+                if (value > 0) {
+                    return "bg-emerald-500/15 text-emerald-200";
+                }
+                if (value < 0) {
+                    return "bg-rose-500/15 text-rose-200";
+                }
+                return "bg-slate-800 text-slate-400";
+            };
+
+            const setDeltaBadge = (element, value, formatter, threshold = 0) => {
+                if (Math.abs(value) <= threshold) {
+                    element.classList.add("hidden");
+                    return;
+                }
+                element.textContent = formatter(value);
+                element.className = `rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${deltaClass(value)}`;
+            };
+
+            const renderWorkerActivity = (created, updated) => {
+                if (created === 0 && updated === 0) {
+                    deltaWorkerActivity.classList.add("hidden");
+                    return;
+                }
+                const parts = [];
+                if (created !== 0) {
+                    parts.push(`${formatSignedInteger(created)} nouveaux articles`);
+                }
+                if (updated !== 0) {
+                    parts.push(`${formatSignedInteger(updated)} articles mis à jour`);
+                }
+                deltaWorkerActivity.textContent = `Depuis le dernier refresh : ${parts.join(", ")}`;
+                deltaWorkerActivity.className = "mt-2 text-xs font-medium text-cyan-200";
+            };
+
+            const renderRefreshDiff = () => {
+                const previousSnapshot = JSON.parse(localStorage.getItem(snapshotStorageKey) || "null");
+                localStorage.setItem(snapshotStorageKey, JSON.stringify(currentSnapshot));
+                if (!previousSnapshot) {
+                    return;
+                }
+
+                const diffs = {
+                    filteredArticles: currentSnapshot.filtered_articles - previousSnapshot.filtered_articles,
+                    topics: currentSnapshot.topics - previousSnapshot.topics,
+                    workerCreated: currentSnapshot.worker_created - previousSnapshot.worker_created,
+                    workerUpdated: currentSnapshot.worker_updated - previousSnapshot.worker_updated,
+                    polarity: currentSnapshot.avg_polarity - previousSnapshot.avg_polarity,
+                    subjectivity: currentSnapshot.avg_subjectivity - previousSnapshot.avg_subjectivity,
+                };
+
+                setDeltaBadge(deltaFilteredArticles, diffs.filteredArticles, formatSignedInteger);
+                setDeltaBadge(deltaTopics, diffs.topics, formatSignedInteger);
+                setDeltaBadge(deltaPolarity, diffs.polarity, formatSignedScore, 0.0005);
+                setDeltaBadge(deltaSubjectivity, diffs.subjectivity, formatSignedScore, 0.0005);
+                renderWorkerActivity(diffs.workerCreated, diffs.workerUpdated);
+            };
+
+            renderRefreshDiff();
             syncAutoRefresh();
         })();
     </script>

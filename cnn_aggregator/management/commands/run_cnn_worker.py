@@ -10,6 +10,7 @@ from cnn_aggregator.utils import (
     cnn_article_sitemap_index_urls,
     cnn_article_urls_from_sitemap,
     retrieve_cnn_articles_for_date,
+    update_article_scores,
 )
 
 
@@ -19,6 +20,11 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--start-date", help="Date to start from, formatted as YYYY-MM-DD.")
         parser.add_argument("--once", action="store_true", help="Process one day and exit.")
+        parser.add_argument(
+            "--rescore-existing",
+            action="store_true",
+            help="Recompute polarity and subjectivity for all stored articles before fetching.",
+        )
         parser.add_argument("--sleep", type=float, default=3.0, help="Seconds to sleep between days.")
         parser.add_argument("--limit-per-day", type=int, default=None, help="Maximum URLs to fetch per day.")
         parser.add_argument(
@@ -48,6 +54,12 @@ class Command(BaseCommand):
         state.save()
 
         self._log(state, f"CNN worker started on {current_date.isoformat()}", WorkerLog.LEVEL_SUCCESS)
+        if options["rescore_existing"]:
+            self._rescore_existing_articles(state)
+            if options["once"]:
+                self._mark_idle(state, "Existing articles rescored. Worker is idle.")
+                return
+
         last_freshness_check = timezone.now()
         self._check_fresh_articles(state, options)
 
@@ -169,6 +181,35 @@ class Command(BaseCommand):
     def _clear_sitemap_caches(self):
         cnn_article_sitemap_index_urls.cache_clear()
         cnn_article_urls_from_sitemap.cache_clear()
+
+    def _rescore_existing_articles(self, state):
+        total = Article.objects.count()
+        self._log(state, f"Rescoring {total} stored articles.", WorkerLog.LEVEL_WARNING)
+
+        for article_index, article in enumerate(Article.objects.order_by("id").iterator(), start=1):
+            state.refresh_from_db()
+            if state.stop_requested:
+                self._log(state, "Rescore stopped by request.", WorkerLog.LEVEL_WARNING)
+                return
+
+            old_polarity = article.polarity
+            old_subjectivity = article.subjectivity
+            update_article_scores(article, force=True)
+
+            if article_index == 1 or article_index % 25 == 0 or article_index == total:
+                state.heartbeat_at = timezone.now()
+                state.last_message = f"Rescored {article_index}/{total} stored articles."
+                state.save()
+                self._log(
+                    state,
+                    (
+                        f"Rescored {article_index}/{total}: {article.title[:90]} "
+                        f"(polarity {old_polarity:.4f}->{article.polarity:.4f}, "
+                        f"subjectivity {old_subjectivity:.4f}->{article.subjectivity:.4f})"
+                    ),
+                )
+
+        self._log(state, f"Finished rescoring {total} stored articles.", WorkerLog.LEVEL_SUCCESS)
 
     def _check_fresh_articles(self, state, options):
         dates_to_scan, latest_date = self._freshness_dates(options["freshness_window_days"])

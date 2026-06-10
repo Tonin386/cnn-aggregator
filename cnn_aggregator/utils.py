@@ -83,6 +83,10 @@ INTENSIFIERS = {word: float(value) for word, value in MODIFIERS.get("intensifier
 DIMINISHERS = {word: float(value) for word, value in MODIFIERS.get("diminishers", {}).items()}
 OBJECTIVE_CUES = set(SUBJECTIVITY_CUES.get("objective_cues", []))
 SUBJECTIVE_CUES = set(SUBJECTIVITY_CUES.get("subjective_cues", []))
+OBJECTIVE_PHRASES = SUBJECTIVITY_CUES.get("objective_phrases", [])
+SUBJECTIVE_PHRASES = SUBJECTIVITY_CUES.get("subjective_phrases", [])
+SUBJECTIVITY_OBJECTIVE_THRESHOLD = 0.30
+SUBJECTIVITY_SUBJECTIVE_THRESHOLD = 0.50
 QUOTE_OR_NUMBER_PATTERN = re.compile(r'["“”]|\b\d+(?:\.\d+)?%?\b')
 WORD_PATTERN = re.compile(r"[a-z]+(?:'[a-z]+)?|\d+(?:\.\d+)?%?")
 CNN_BASE_URL = "https://www.cnn.com/"
@@ -220,6 +224,31 @@ def add_sentiment_contribution(contributions, term, kind, score, weight, modifie
     if modifiers:
         entry["modifiers"].update(modifiers)
 
+def weighted_token_count(tokens, cue_words, prefix):
+    term_counts = {}
+    total = 0.0
+    for token in tokens:
+        if token in cue_words:
+            total += repeated_term_weight(term_counts, f"{prefix}:{token}")
+    return total
+
+def weighted_phrase_count(normalized_text_lower, phrase_patterns, prefix):
+    term_counts = {}
+    total = 0.0
+    for pattern in phrase_patterns:
+        occurrences = len(re.findall(pattern, normalized_text_lower))
+        for _ in range(occurrences):
+            total += repeated_term_weight(term_counts, f"{prefix}:{pattern}")
+    return total
+
+def classify_subjectivity(score):
+    score = np.clip(float(score), 0.0, 1.0)
+    if score < SUBJECTIVITY_OBJECTIVE_THRESHOLD:
+        return "Objectif"
+    if score < SUBJECTIVITY_SUBJECTIVE_THRESHOLD:
+        return "Insuffisamment objectif"
+    return "Subjectif"
+
 def sentiment_contributions(text, limit=30):
     if not text or not text.strip():
         return []
@@ -312,6 +341,66 @@ def preprocess_text(text):
     
     return preprocessed_text
 
+def analyze_subjectivity(
+    normalized_text,
+    normalized_text_lower,
+    tokens,
+    blob_subjectivity,
+    sentiment_hits,
+    custom_polarity,
+):
+    token_count = max(len(tokens), 1)
+    length_scale = np.sqrt(token_count / 25)
+    objective_word_weight = weighted_token_count(tokens, OBJECTIVE_CUES, "objective")
+    subjective_word_weight = weighted_token_count(tokens, SUBJECTIVE_CUES, "subjective")
+    objective_phrase_weight = weighted_phrase_count(
+        normalized_text_lower,
+        OBJECTIVE_PHRASES,
+        "objective-phrase",
+    )
+    subjective_phrase_weight = weighted_phrase_count(
+        normalized_text_lower,
+        SUBJECTIVE_PHRASES,
+        "subjective-phrase",
+    )
+    evidence_weight = min(len(QUOTE_OR_NUMBER_PATTERN.findall(normalized_text)), 18)
+
+    objective_signal = (
+        objective_word_weight
+        + 1.35 * objective_phrase_weight
+        + 0.45 * evidence_weight
+    ) / length_scale
+    subjective_signal = (
+        subjective_word_weight
+        + 1.45 * subjective_phrase_weight
+        + 0.40 * sentiment_hits
+        + 0.70 * abs(custom_polarity)
+    ) / length_scale
+
+    objective_signal = min(objective_signal, 1.6)
+    subjective_signal = min(subjective_signal, 1.6)
+    cue_subjectivity = np.clip(
+        0.24
+        + 0.36 * subjective_signal
+        - 0.24 * objective_signal,
+        0,
+        1,
+    )
+    sentiment_density = min(sentiment_hits / token_count, 0.16)
+    subjectivity_floor = 0.04 + sentiment_density
+    subjectivity_ceiling = 1.0
+
+    if objective_signal > 0.65 and subjective_signal < 0.35:
+        subjectivity_ceiling = 0.42
+    elif objective_signal > 1.0 and subjective_signal < 0.6:
+        subjectivity_ceiling = 0.48
+
+    return np.clip(
+        max(0.42 * blob_subjectivity + 0.58 * cue_subjectivity, subjectivity_floor),
+        0,
+        subjectivity_ceiling,
+    )
+
 def analyze_sentiment(text):
     if not text or not text.strip():
         return 0.0, 0.0
@@ -375,30 +464,19 @@ def analyze_sentiment(text):
         1
     )
 
-    objective_cue_count = sum(token in OBJECTIVE_CUES for token in tokens)
-    subjective_cue_count = sum(token in SUBJECTIVE_CUES for token in tokens)
-    evidence_count = len(QUOTE_OR_NUMBER_PATTERN.findall(normalized_text))
-    token_count = max(len(tokens), 1)
-
-    subjectivity_adjustment = (
-        0.04 * subjective_cue_count
-        - 0.035 * objective_cue_count
-        - 0.015 * evidence_count
-    ) / np.sqrt(token_count / 25)
-
-    sentiment_density = min(sentiment_hits / token_count, 0.2)
-    subjectivity_floor = 0.06 + sentiment_density
-
-    sentiment_subjectivity = np.clip(
-        max(blob_subjectivity + subjectivity_adjustment, subjectivity_floor),
-        0,
-        1
+    sentiment_subjectivity = analyze_subjectivity(
+        normalized_text,
+        normalized_text_lower,
+        tokens,
+        blob_subjectivity,
+        sentiment_hits,
+        custom_polarity,
     )
 
     return float(sentiment_polarity), float(sentiment_subjectivity)
 
-def update_article_scores(article):
-    if article.polarity != 0 and article.subjectivity != 0:
+def update_article_scores(article, force=False):
+    if not force and article.polarity != 0 and article.subjectivity != 0:
         return
 
     article.polarity, article.subjectivity = analyze_sentiment(

@@ -1,8 +1,38 @@
 {
   "objective_cues": [
-    "according", "analysis", "announced", "audit", "confirmed", "data", "document", "documents", "evidence", "figure", "figures", "filing", "official", "officials", "percent", "poll", "records", "reported", "report", "said", "source", "sources", "statement", "statistics", "study", "survey", "testimony", "told"
+    "according", "agency", "analysis", "announced", "audit", "briefing", "census", "committee", "confirmed", "court", "data", "document", "documents", "evidence", "expert", "experts", "figure", "figures", "filing", "hearing", "investigation", "lawmakers", "official", "officials", "percent", "police", "poll", "records", "reported", "report", "researchers", "source", "sources", "statement", "statistics", "study", "survey", "testified", "testimony", "told", "transcript", "witness", "witnesses"
   ],
   "subjective_cues": [
-    "allegedly", "awful", "beautiful", "best", "clearly", "could", "disgrace", "extraordinary", "horrible", "incredible", "likely", "may", "might", "must", "opinion", "perhaps", "probably", "remarkable", "seems", "shocking", "should", "stunning", "terrible", "worst"
+    "allegedly", "apparently", "arguably", "awful", "beautiful", "best", "bizarre", "blistering", "brilliant", "clearly", "could", "devastating", "disgrace", "dramatic", "embarrassing", "extraordinary", "furious", "horrible", "incredible", "likely", "may", "might", "must", "opinion", "outrageous", "perhaps", "probably", "remarkable", "seems", "shocking", "should", "stunning", "suggests", "terrible", "unbelievable", "unlikely", "worst"
+  ],
+  "objective_phrases": [
+    "\\baccording to\\b",
+    "\\bcourt documents\\b",
+    "\\bcourt records\\b",
+    "\\bdata from\\b",
+    "\\bfederal officials\\b",
+    "\\bgovernment data\\b",
+    "\\bin a statement\\b",
+    "\\bofficials said\\b",
+    "\\bpolice said\\b",
+    "\\bpublic records\\b",
+    "\\breport found\\b",
+    "\\bsaid in a statement\\b",
+    "\\bthe filing said\\b",
+    "\\bthe report said\\b",
+    "\\btold cnn\\b"
+  ],
+  "subjective_phrases": [
+    "\\bcritics say\\b",
+    "\\bexperts warn\\b",
+    "\\bis expected to\\b",
+    "\\bis likely to\\b",
+    "\\bmay have\\b",
+    "\\bmight have\\b",
+    "\\bseems to\\b",
+    "\\bshould have\\b",
+    "\\bsome believe\\b",
+    "\\bsparked outrage\\b",
+    "\\bwidely criticized\\b"
   ]
 }

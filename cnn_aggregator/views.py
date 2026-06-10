@@ -7,7 +7,12 @@ from django.http import JsonResponse
 from django.shortcuts import render
 import plotly.graph_objs as go
 import plotly.offline as pyo
-from .utils import article_highlight_word_groups, sentiment_contributions
+from .utils import (
+    SUBJECTIVITY_OBJECTIVE_THRESHOLD,
+    SUBJECTIVITY_SUBJECTIVE_THRESHOLD,
+    article_highlight_word_groups,
+    sentiment_contributions,
+)
 from .models import Article, WorkerLog, WorkerState
 from datetime import timedelta
 import os
@@ -33,10 +38,25 @@ def home(request):
     total_topics = articles_queryset.values("topic").distinct().count()
     avg_polarity = articles_queryset.aggregate(value=Avg("polarity"))["value"] or 0
     avg_subjectivity = articles_queryset.aggregate(value=Avg("subjectivity"))["value"] or 0
+    global_article_count = Article.objects.count()
+    refresh_snapshot = {
+        "filtered_articles": total_articles,
+        "global_articles": global_article_count,
+        "topics": total_topics,
+        "avg_polarity": float(avg_polarity),
+        "avg_subjectivity": float(avg_subjectivity),
+        "worker_seen": worker_state.total_seen,
+        "worker_created": worker_state.total_created,
+        "worker_updated": worker_state.total_updated,
+        "worker_status": worker_state.status,
+        "captured_at": timezone.now().isoformat(),
+    }
     filter_params = request.GET.copy()
     filter_params.pop("page", None)
     filter_querystring = filter_params.urlencode()
     bounds = [-1, -.33, .33, 1]
+    subjectivity_objective_threshold = SUBJECTIVITY_OBJECTIVE_THRESHOLD
+    subjectivity_subjective_threshold = SUBJECTIVITY_SUBJECTIVE_THRESHOLD
 
     return render(request, "home.html", locals())
 
@@ -63,9 +83,14 @@ def apply_article_filters(queryset, params):
     elif sentiment == "positive":
         queryset = queryset.filter(polarity__gt=0.33)
     if subjectivity == "objective":
-        queryset = queryset.filter(subjectivity__lt=0.4)
+        queryset = queryset.filter(subjectivity__lt=SUBJECTIVITY_OBJECTIVE_THRESHOLD)
+    elif subjectivity == "insufficient":
+        queryset = queryset.filter(
+            subjectivity__gte=SUBJECTIVITY_OBJECTIVE_THRESHOLD,
+            subjectivity__lt=SUBJECTIVITY_SUBJECTIVE_THRESHOLD,
+        )
     elif subjectivity == "subjective":
-        queryset = queryset.filter(subjectivity__gte=0.4)
+        queryset = queryset.filter(subjectivity__gte=SUBJECTIVITY_SUBJECTIVE_THRESHOLD)
 
     return queryset
 
@@ -223,19 +248,29 @@ def start_worker(request):
         return JsonResponse({"status": "already_running", "worker": serialize_worker_state(state)})
 
     WorkerLog.write(state, "Start requested from dashboard.")
-    state.status = WorkerState.STATUS_RUNNING
-    state.stop_requested = False
-    state.last_message = "Starting worker process..."
-    state.heartbeat_at = timezone.now()
-    state.save()
+    launch_worker_process(state, ["run_cnn_worker"], "Starting worker process...")
+    return JsonResponse({"status": "started", "worker": serialize_worker_state(state)})
 
-    subprocess.Popen(
-        [sys.executable, "manage.py", "run_cnn_worker"],
-        cwd=os.getcwd(),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+@csrf_exempt
+def rescore_worker(request):
+    state = WorkerState.get_solo()
+    if is_worker_recently_alive(state):
+        return JsonResponse({"status": "already_running", "worker": serialize_worker_state(state)})
+
+    continue_after = request.GET.get("continue") == "1"
+    command_args = ["run_cnn_worker", "--rescore-existing"]
+    if not continue_after:
+        command_args.append("--once")
+
+    if continue_after:
+        message = "Rescore requested from dashboard, then continue worker."
+        launch_message = "Starting rescore, then worker process..."
+    else:
+        message = "Rescore-only requested from dashboard."
+        launch_message = "Starting rescore-only process..."
+
+    WorkerLog.write(state, message, WorkerLog.LEVEL_WARNING)
+    launch_worker_process(state, command_args, launch_message)
     return JsonResponse({"status": "started", "worker": serialize_worker_state(state)})
 
 @csrf_exempt
@@ -247,6 +282,21 @@ def stop_worker(request):
     state.last_message = "Stop requested from dashboard."
     state.save()
     return JsonResponse({"status": "stopping", "worker": serialize_worker_state(state)})
+
+def launch_worker_process(state, command_args, launch_message):
+    state.status = WorkerState.STATUS_RUNNING
+    state.stop_requested = False
+    state.last_message = launch_message
+    state.heartbeat_at = timezone.now()
+    state.save()
+
+    subprocess.Popen(
+        [sys.executable, "manage.py", *command_args],
+        cwd=os.getcwd(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 def is_worker_recently_alive(state):
     if state.status != WorkerState.STATUS_RUNNING or not state.heartbeat_at:
@@ -287,5 +337,7 @@ class ArticleDetailView(DetailView):
         context["sentiment_contributions"] = sentiment_contributions(
             f"{self.object.title}. {self.object.content}"
         )
+        context["subjectivity_objective_threshold"] = SUBJECTIVITY_OBJECTIVE_THRESHOLD
+        context["subjectivity_subjective_threshold"] = SUBJECTIVITY_SUBJECTIVE_THRESHOLD
 
         return context
