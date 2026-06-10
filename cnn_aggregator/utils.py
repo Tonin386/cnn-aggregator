@@ -61,14 +61,14 @@ def load_json_lexicon(filename, fallback):
 def build_sentiment_lexicon(categories):
     lexicon = {}
     for category in categories.values():
-        score = float(category["score"])
+        score = np.clip(float(category["score"]) * 1.18, -1, 1)
         for word in category["words"]:
             lexicon[word.lower()] = score
     return lexicon
 
 def build_phrase_lexicon(entries):
     return {
-        entry["pattern"]: float(entry["score"])
+        entry["pattern"]: np.clip(float(entry["score"]) * 1.18, -1, 1)
         for entry in entries
     }
 
@@ -193,6 +193,10 @@ def fix_text_encoding(text):
 def mojibake_score(text):
     return sum(text.count(marker) for marker in MOJIBAKE_MARKERS)
 
+def repeated_term_weight(term_counts, term):
+    term_counts[term] = term_counts.get(term, 0) + 1
+    return 1 / np.sqrt(term_counts[term])
+
 def read_article(article_html):
     title_tag = article_html.find('h1')
     title = fix_text_encoding(title_tag.get_text(" ", strip=True)) if title_tag else ""
@@ -245,12 +249,14 @@ def analyze_sentiment(text):
 
     custom_score = 0.0
     sentiment_hits = 0
+    term_counts = {}
 
     for pattern, score in NEWS_PHRASE_LEXICON.items():
         occurrences = len(re.findall(pattern, normalized_text_lower))
-        if occurrences:
-            custom_score += score * occurrences
-            sentiment_hits += occurrences
+        for _ in range(occurrences):
+            weight = repeated_term_weight(term_counts, f"phrase:{pattern}")
+            custom_score += score * weight
+            sentiment_hits += weight
 
     for index, token in enumerate(tokens):
         if token not in SENTIMENT_LEXICON:
@@ -266,19 +272,20 @@ def analyze_sentiment(text):
             score *= INTENSIFIERS.get(previous, 1.0)
             score *= DIMINISHERS.get(previous, 1.0)
 
-        custom_score += score
-        sentiment_hits += 1
+        weight = repeated_term_weight(term_counts, f"word:{token}")
+        custom_score += score * weight
+        sentiment_hits += weight
 
     if sentiment_hits:
-        custom_polarity = np.tanh(custom_score / np.sqrt(sentiment_hits))
+        custom_polarity = np.tanh(custom_score / np.sqrt(max(sentiment_hits, 1)))
     else:
         custom_polarity = 0.0
 
     sentiment_polarity = np.clip(
         (
-            0.35 * blob_polarity
-            + 0.35 * vader_polarity
-            + 0.30 * custom_polarity
+            0.30 * blob_polarity
+            + 0.30 * vader_polarity
+            + 0.40 * custom_polarity
         ),
         -1,
         1
