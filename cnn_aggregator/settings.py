@@ -24,7 +24,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'cnn_aggregator'
+    'cnn_aggregator.apps.CnnAggregatorConfig'
 ]
 
 MIDDLEWARE = [

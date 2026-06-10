@@ -1,0 +1,32 @@
+{
+  "negations": [
+    "cannot", "hardly", "neither", "never", "no", "none", "nor", "not", "rarely", "scarcely", "without"
+  ],
+  "intensifiers": {
+    "absolutely": 1.35,
+    "deeply": 1.25,
+    "dramatically": 1.3,
+    "especially": 1.15,
+    "extremely": 1.45,
+    "highly": 1.2,
+    "incredibly": 1.35,
+    "massively": 1.35,
+    "particularly": 1.15,
+    "profoundly": 1.3,
+    "severely": 1.35,
+    "significantly": 1.25,
+    "truly": 1.15,
+    "very": 1.25
+  },
+  "diminishers": {
+    "allegedly": 0.85,
+    "apparently": 0.85,
+    "arguably": 0.85,
+    "partly": 0.85,
+    "possibly": 0.85,
+    "potentially": 0.85,
+    "reportedly": 0.9,
+    "slightly": 0.75,
+    "somewhat": 0.8
+  }
+}

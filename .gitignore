@@ -161,5 +161,4 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-cnn_aggregator/migrations/*
-!cnn_aggregator/migrations/__init__.py
+cnn_aggregator/migrations/__pycache__/

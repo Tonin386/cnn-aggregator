@@ -1,0 +1,122 @@
+{
+  "catastrophic_negative": {
+    "score": -0.9,
+    "words": [
+      "apocalypse", "atrocity", "atrocious", "bloodbath", "carnage", "catastrophe", "catastrophic", "devastation", "genocide", "massacre", "murder", "slaughter", "terrorism", "torture"
+    ]
+  },
+  "severe_negative": {
+    "score": -0.78,
+    "words": [
+      "abuse", "ambush", "assassination", "attack", "attacked", "attacks", "bombing", "brutal", "collapse", "collapsed", "deadly", "death", "deaths", "destroyed", "destruction", "devastating", "disaster", "drowned", "emergency", "explosion", "fatal", "famine", "hostage", "hurricane", "injured", "invasion", "kidnapped", "killed", "kills", "lethal", "massacre", "murdered", "outbreak", "rape", "riot", "shooting", "suicide", "terror", "threat", "tornado", "tragedy", "tsunami", "violence", "violent", "war", "wildfire"
+    ]
+  },
+  "strong_negative": {
+    "score": -0.62,
+    "words": [
+      "accused", "alarming", "bankrupt", "betrayal", "chaos", "charged", "crackdown", "crisis", "criminal", "danger", "dangerous", "defeat", "desperate", "despair", "detained", "disrupted", "drought", "evacuated", "extremist", "fail", "failed", "failure", "fear", "fired", "fraud", "guilty", "harm", "hate", "hatred", "illegal", "lawsuit", "loss", "menace", "misery", "panic", "plunge", "poison", "prosecuted", "recession", "sanctions", "scandal", "sentenced", "severe", "shame", "slump", "strike", "suffering", "suspect", "threatened", "toxic", "tragic", "unrest", "victim", "vulnerable", "wounded"
+    ]
+  },
+  "moderate_negative": {
+    "score": -0.4,
+    "words": [
+      "anger", "angry", "anguish", "anxiety", "anxious", "bad", "ban", "banned", "bans", "blame", "concern", "concerned", "concerning", "conflict", "controversial", "criticism", "damaged", "decline", "declined", "delay", "delayed", "deny", "denied", "dispute", "disputed", "downturn", "drop", "dropped", "fall", "falling", "falls", "frustrated", "grim", "hardship", "inflation", "instability", "issue", "layoff", "lawsuits", "loses", "losing", "mistake", "negative", "pain", "problem", "protest", "protested", "risk", "risks", "sad", "sadness", "shortage", "skeptical", "struggle", "struggling", "tension", "turmoil", "uncertain", "weak", "worry", "worried"
+    ]
+  },
+  "mild_negative": {
+    "score": -0.2,
+    "words": [
+      "awkward", "cautious", "challenged", "complicated", "costly", "difficult", "doubt", "doubts", "fragile", "hurdle", "limited", "pressure", "questioned", "slow", "slowed", "strained", "uneasy", "unexpected", "unpopular", "volatile", "warning"
+    ]
+  },
+  "neutral_factual": {
+    "score": -0.02,
+    "words": [
+      "average", "common", "commonplace", "ordinary", "routine", "standard", "typical", "unremarkable", "usual"
+    ]
+  },
+  "mild_positive": {
+    "score": 0.22,
+    "words": [
+      "able", "accepted", "aid", "calm", "capable", "cooperate", "cooperation", "eased", "encourage", "encouraged", "fair", "improve", "improved", "improving", "opportunity", "prepared", "progress", "promising", "resolved", "stable", "support", "supported", "useful", "welcome"
+    ]
+  },
+  "moderate_positive": {
+    "score": 0.42,
+    "words": [
+      "achievement", "agreement", "approved", "benefit", "boost", "breakthrough", "comfort", "deal", "effective", "effort", "efforts", "gain", "gains", "good", "growth", "help", "helped", "hope", "hopeful", "peace", "positive", "protect", "protected", "recovery", "relief", "rescue", "rescued", "rise", "rises", "secure", "solution", "strong", "successful", "victory", "win", "wins"
+    ]
+  },
+  "strong_positive": {
+    "score": 0.62,
+    "words": [
+      "accomplished", "bliss", "celebrated", "excellent", "exciting", "happiness", "happy", "incredible", "joy", "landmark", "love", "prosperity", "proud", "record", "remarkable", "success", "surge", "thriving", "triumph", "wonderful"
+    ]
+  },
+  "optimistic_positive": {
+    "score": 0.78,
+    "words": [
+      "booming", "euphoria", "fulfillment", "greatness", "historic", "perfect", "revolutionary", "soaring", "transformative", "unprecedented"
+    ]
+  },
+  "legal_negative": {
+    "score": -0.48,
+    "words": [
+      "arraigned", "arrest", "arrested", "bribery", "conviction", "corruption", "courtroom", "embezzlement", "felony", "indicted", "indictment", "jail", "litigation", "manslaughter", "misconduct", "perjury", "prison", "probe", "racketeering", "subpoena", "trial", "verdict"
+    ]
+  },
+  "economic_negative": {
+    "score": -0.36,
+    "words": [
+      "austerity", "bubble", "contraction", "crash", "debt", "default", "deficit", "devaluation", "downgrade", "foreclosure", "insolvency", "layoffs", "liquidation", "restructuring", "slowdown", "stagnation", "tariff", "tariffs", "unemployment"
+    ]
+  },
+  "health_negative": {
+    "score": -0.52,
+    "words": [
+      "addiction", "cancer", "contagion", "contaminated", "disease", "epidemic", "illness", "infection", "mortality", "overdose", "pandemic", "pathogen", "poisoning", "sick", "stroke", "virus"
+    ]
+  },
+  "climate_negative": {
+    "score": -0.5,
+    "words": [
+      "blizzard", "cyclone", "deforestation", "earthquake", "erosion", "flood", "flooding", "heatwave", "landslide", "pollution", "scarcity", "storm", "warming"
+    ]
+  },
+  "political_negative": {
+    "score": -0.34,
+    "words": [
+      "boycott", "censorship", "coup", "deadlock", "disinformation", "gridlock", "impeachment", "polarization", "propaganda", "repression", "stalemate", "suppression", "veto"
+    ]
+  },
+  "security_negative": {
+    "score": -0.58,
+    "words": [
+      "breach", "cyberattack", "espionage", "extortion", "hacked", "hijacking", "militia", "missile", "ransomware", "sabotage", "smuggling", "trafficking"
+    ]
+  },
+  "market_positive": {
+    "score": 0.36,
+    "words": [
+      "advance", "advanced", "bullish", "dividend", "expansion", "outperform", "profit", "profitable", "rally", "rebound", "upgrade", "upswing"
+    ]
+  },
+  "governance_positive": {
+    "score": 0.34,
+    "words": [
+      "accountability", "compromise", "diplomacy", "reform", "reforms", "transparency", "verification"
+    ]
+  },
+  "health_positive": {
+    "score": 0.48,
+    "words": [
+      "cure", "healing", "immunity", "recovered", "survivor", "treatment", "vaccine", "wellness"
+    ]
+  },
+  "resilience_positive": {
+    "score": 0.5,
+    "words": [
+      "adaptation", "comeback", "endurance", "resilience", "restored", "revival", "stabilized", "strengthened"
+    ]
+  }
+}

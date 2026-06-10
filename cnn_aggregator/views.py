@@ -1,74 +1,279 @@
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic.detail import DetailView
-from .utils import retrieve_cnn_homepage
+from django.core.paginator import Paginator
+from django.db.models import Avg, Count
+from django.utils import timezone
 from django.http import JsonResponse
 from django.shortcuts import render
-from collections import Counter
 import plotly.graph_objs as go
 import plotly.offline as pyo
-from .models import Article
-from datetime import date
-import numpy as np
+from .utils import article_highlight_word_groups
+from .models import Article, WorkerLog, WorkerState
+from datetime import timedelta
+import os
+import subprocess
+import sys
 
 def home(request):
-    articles = Article.objects.filter(fetch_date=date.today())
-    topics_values = articles.values_list('topic', flat=True)
+    articles_queryset = apply_article_filters(Article.objects.all(), request.GET)
+    topic_options = Article.objects.order_by("topic").values_list("topic", flat=True).distinct()
+    paginator = Paginator(articles_queryset, 16)
+    page_obj = paginator.get_page(request.GET.get("page"))
+    articles = page_obj.object_list
+    worker_state = WorkerState.get_solo()
 
-    # Count occurrences of each topic
-    topics = Counter(topics_values)
-    sorted_topics = {k: v for k, v in sorted(topics.items(), key=lambda item: item[1], reverse=True)}
+    topic_graph = build_topic_graph(articles_queryset)
+    sentiment_graph = build_sentiment_graph(articles_queryset)
+    timeline_graph = build_timeline_graph(articles_queryset)
+    subjectivity_timeline_graph = build_subjectivity_timeline_graph(articles_queryset)
+    topic_polarity_graph = build_topic_polarity_graph(articles_queryset)
+    subjectivity_graph = build_subjectivity_graph(articles_queryset)
 
-    words = list(sorted_topics.keys())
-    counts = list(sorted_topics.values())
-    fig = go.Figure(data=[go.Bar(x=words, y=counts, text=counts, textposition='outside')])
-
-    fig.update_layout(
-        title="Today's topics on CNN front page",
-        xaxis_title='Topics',
-        yaxis_title='Occurrences',
-        template='plotly_dark'
-    )
-    todays_topic_graph = pyo.plot(fig, output_type='div', include_plotlyjs=True)
-
-    topic_polarity_means = []
-    for word in words:
-        topic_polarity_means.append(np.mean(articles.filter(topic=word).values_list('polarity', flat=True)))
-
-    fig = go.Figure(data=[go.Bar(x=words, y=topic_polarity_means, text=["%.3f" % value for value in topic_polarity_means], textposition='outside')])
-
-    fig.update_layout(
-        title="Average sentiment polarity score per topic",
-        xaxis_title='Topics',
-        yaxis_title='Mean value',
-        template='plotly_dark'
-    )
-    todays_topic_polarity_graph = pyo.plot(fig, output_type='div', include_plotlyjs=True)
-
-
-    topic_subjectivity_means = []
-    for word in words:
-        topic_subjectivity_means.append(np.mean(articles.filter(topic=word).values_list('subjectivity', flat=True)))
-
-    fig = go.Figure(data=[go.Bar(x=words, y=topic_subjectivity_means, text=["%.3f" % value for value in topic_subjectivity_means], textposition='outside')])
-
-    fig.update_layout(
-        title="Average sentiment subjectivity score per topic",
-        xaxis_title='Topics',
-        yaxis_title='Mean value',
-        template='plotly_dark'
-    )
-    todays_topic_subjectivity_graph = pyo.plot(fig, output_type='div', include_plotlyjs=True)
-
+    total_articles = articles_queryset.count()
+    total_topics = articles_queryset.values("topic").distinct().count()
+    avg_polarity = articles_queryset.aggregate(value=Avg("polarity"))["value"] or 0
+    avg_subjectivity = articles_queryset.aggregate(value=Avg("subjectivity"))["value"] or 0
+    filter_params = request.GET.copy()
+    filter_params.pop("page", None)
+    filter_querystring = filter_params.urlencode()
     bounds = [-1, -.33, .33, 1]
 
     return render(request, "home.html", locals())
 
+def apply_article_filters(queryset, params):
+    query = params.get("q", "").strip()
+    topic = params.get("topic", "").strip()
+    date_from = params.get("date_from", "").strip()
+    date_to = params.get("date_to", "").strip()
+    sentiment = params.get("sentiment", "").strip()
+    subjectivity = params.get("subjectivity", "").strip()
+
+    if query:
+        queryset = queryset.filter(title__icontains=query)
+    if topic:
+        queryset = queryset.filter(topic=topic)
+    if date_from:
+        queryset = queryset.filter(published_date__gte=date_from)
+    if date_to:
+        queryset = queryset.filter(published_date__lte=date_to)
+    if sentiment == "negative":
+        queryset = queryset.filter(polarity__lt=-0.33)
+    elif sentiment == "neutral":
+        queryset = queryset.filter(polarity__gte=-0.33, polarity__lte=0.33)
+    elif sentiment == "positive":
+        queryset = queryset.filter(polarity__gt=0.33)
+    if subjectivity == "objective":
+        queryset = queryset.filter(subjectivity__lt=0.4)
+    elif subjectivity == "subjective":
+        queryset = queryset.filter(subjectivity__gte=0.4)
+
+    return queryset
+
+def plot(fig):
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=40, r=20, t=55, b=45),
+        height=360,
+        font=dict(color="#f8f9fa"),
+    )
+    return pyo.plot(
+        fig,
+        output_type="div",
+        include_plotlyjs=False,
+        config={"displayModeBar": False, "responsive": True},
+    )
+
+def build_topic_graph(queryset):
+    rows = list(queryset.values("topic").annotate(total=Count("id")).order_by("-total")[:12])
+    fig = go.Figure(data=[go.Bar(
+        x=[row["topic"].title() for row in rows],
+        y=[row["total"] for row in rows],
+        marker_color="#4dabf7",
+        text=[row["total"] for row in rows],
+        textposition="outside",
+    )])
+    fig.update_layout(title="Topics les plus représentés", xaxis_title="", yaxis_title="Articles")
+    return plot(fig)
+
+def build_sentiment_graph(queryset):
+    negative = queryset.filter(polarity__lt=-0.33).count()
+    neutral = queryset.filter(polarity__gte=-0.33, polarity__lte=0.33).count()
+    positive = queryset.filter(polarity__gt=0.33).count()
+    fig = go.Figure(data=[go.Pie(
+        labels=["Négatif", "Neutre", "Positif"],
+        values=[negative, neutral, positive],
+        hole=.48,
+        marker=dict(colors=["#fa5252", "#dee2e6", "#51cf66"]),
+    )])
+    fig.update_layout(title="Répartition du ton")
+    return plot(fig)
+
+def build_timeline_graph(queryset):
+    rows = list(
+        queryset
+        .exclude(published_date__isnull=True)
+        .values("published_date")
+        .annotate(total=Count("id"), polarity=Avg("polarity"))
+        .order_by("published_date")
+    )
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=[row["published_date"] for row in rows],
+        y=[row["total"] for row in rows],
+        name="Articles",
+        marker_color="#4dabf7",
+        opacity=0.55,
+    ))
+    fig.add_trace(go.Scatter(
+        x=[row["published_date"] for row in rows],
+        y=[row["polarity"] for row in rows],
+        mode="lines+markers",
+        name="Polarité moyenne",
+        yaxis="y2",
+        line=dict(color="#ff922b"),
+    ))
+    fig.update_layout(
+        title="Volume et polarité dans le temps",
+        yaxis=dict(title="Articles"),
+        yaxis2=dict(title="Polarité", overlaying="y", side="right", range=[-1, 1]),
+        legend=dict(orientation="h"),
+        bargap=0.25,
+    )
+    return plot(fig)
+
+def build_subjectivity_graph(queryset):
+    rows = list(queryset.values("topic").annotate(value=Avg("subjectivity"), total=Count("id")).order_by("-total")[:12])
+    fig = go.Figure(data=[go.Bar(
+        x=[row["topic"].title() for row in rows],
+        y=[row["value"] for row in rows],
+        marker_color="#9775fa",
+        text=["%.2f" % (row["value"] or 0) for row in rows],
+        textposition="outside",
+    )])
+    fig.update_layout(title="Subjectivité moyenne par topic", xaxis_title="", yaxis_title="Score")
+    return plot(fig)
+
+def build_topic_polarity_graph(queryset):
+    rows = list(queryset.values("topic").annotate(value=Avg("polarity"), total=Count("id")).order_by("-total")[:12])
+    fig = go.Figure(data=[go.Bar(
+        x=[row["topic"].title() for row in rows],
+        y=[row["value"] for row in rows],
+        marker_color=[
+            "#51cf66" if (row["value"] or 0) > 0.33 else "#fa5252" if (row["value"] or 0) < -0.33 else "#dee2e6"
+            for row in rows
+        ],
+        text=["%.2f" % (row["value"] or 0) for row in rows],
+        textposition="outside",
+    )])
+    fig.update_layout(
+        title="Polarité moyenne par topic",
+        xaxis_title="",
+        yaxis_title="Score",
+        yaxis=dict(range=[-1, 1]),
+    )
+    return plot(fig)
+
+def build_subjectivity_timeline_graph(queryset):
+    rows = list(
+        queryset
+        .exclude(published_date__isnull=True)
+        .values("published_date")
+        .annotate(total=Count("id"), subjectivity=Avg("subjectivity"))
+        .order_by("published_date")
+    )
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=[row["published_date"] for row in rows],
+        y=[row["total"] for row in rows],
+        name="Articles",
+        marker_color="#4dabf7",
+        opacity=0.55,
+    ))
+    fig.add_trace(go.Scatter(
+        x=[row["published_date"] for row in rows],
+        y=[row["subjectivity"] for row in rows],
+        mode="lines+markers",
+        name="Subjectivité moyenne",
+        yaxis="y2",
+        line=dict(color="#b197fc"),
+    ))
+    fig.update_layout(
+        title="Volume et subjectivité dans le temps",
+        yaxis=dict(title="Articles"),
+        yaxis2=dict(title="Subjectivité", overlaying="y", side="right", range=[0, 1]),
+        legend=dict(orientation="h"),
+        bargap=0.25,
+    )
+    return plot(fig)
+
+def worker_dashboard(request):
+    state = WorkerState.get_solo()
+    return render(request, "worker_dashboard.html", {"state": state})
+
+def worker_status(request):
+    state = WorkerState.get_solo()
+    return JsonResponse(serialize_worker_state(state))
+
 @csrf_exempt
-def sync_cnn(request):
-    print("Updating database...")
-    retrieve_cnn_homepage()
-    print("Done!")
-    return JsonResponse({"status": "success"})
+def start_worker(request):
+    state = WorkerState.get_solo()
+    if is_worker_recently_alive(state):
+        return JsonResponse({"status": "already_running", "worker": serialize_worker_state(state)})
+
+    WorkerLog.write(state, "Start requested from dashboard.")
+    state.status = WorkerState.STATUS_RUNNING
+    state.stop_requested = False
+    state.last_message = "Starting worker process..."
+    state.heartbeat_at = timezone.now()
+    state.save()
+
+    subprocess.Popen(
+        [sys.executable, "manage.py", "run_cnn_worker"],
+        cwd=os.getcwd(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return JsonResponse({"status": "started", "worker": serialize_worker_state(state)})
+
+@csrf_exempt
+def stop_worker(request):
+    state = WorkerState.get_solo()
+    WorkerLog.write(state, "Stop requested from dashboard.", WorkerLog.LEVEL_WARNING)
+    state.stop_requested = True
+    state.status = WorkerState.STATUS_STOPPING
+    state.last_message = "Stop requested from dashboard."
+    state.save()
+    return JsonResponse({"status": "stopping", "worker": serialize_worker_state(state)})
+
+def is_worker_recently_alive(state):
+    if state.status != WorkerState.STATUS_RUNNING or not state.heartbeat_at:
+        return False
+    return timezone.now() - state.heartbeat_at < timedelta(minutes=5)
+
+def serialize_worker_state(state):
+    return {
+        "status": state.status,
+        "current_date": state.current_date.isoformat() if state.current_date else None,
+        "started_at": state.started_at.isoformat() if state.started_at else None,
+        "heartbeat_at": state.heartbeat_at.isoformat() if state.heartbeat_at else None,
+        "last_message": state.last_message,
+        "last_error": state.last_error,
+        "total_seen": state.total_seen,
+        "total_created": state.total_created,
+        "total_updated": state.total_updated,
+        "stop_requested": state.stop_requested,
+        "logs": [
+            {
+                "created_at": log.created_at.isoformat(),
+                "level": log.level,
+                "message": log.message,
+            }
+            for log in state.logs.order_by("-created_at", "-id")[:150]
+        ],
+    }
 
 class ArticleDetailView(DetailView):
     model = Article
@@ -77,39 +282,7 @@ class ArticleDetailView(DetailView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        
-        context["disturbing"] = [
-            "apocalypse", "disaster", "crisis", "catastrophe", "threat",
-            "terror", "violence", "fear", "destruction", "chaos", "danger",
-            "terrible", "atrocious", "calamity", "tragedy", "carnage", 'murder',
-            "war", "menace", "critical", "attack", "attacks", "devastating"
-        ]
-
-        context["negative"] = [
-            "despair", "suffering", "misery", "anguish", "pain",
-            "grief", "sadness", "melancholy", "depression", "anxiety",
-            "issue", "problem", "bad", "vulnerable", "sad", "concern",
-            "concerning", "worried", "dead", "death"
-        ]
-
-        context["neutral"] = [
-            "routine", "commonplace", "ordinary", "standard", "typical",
-            "usual", "unremarkable", "mundane", "average", "common", "boring"
-        ]
-
-        context["positive"] = [
-            "hope", "comfort", "relief", "contentment", "satisfaction",
-            "joy", "happiness", "love", "excitement", "enthusiasm", "good",
-            "agreement", "effort", "happy", "hopeful", "proud", "life", "hope", 
-            "hopeful", "support", "efforts"
-        ]
-
-        context["optimistic"] = [
-            "potential", "prosperity", "success", "wonderful", "perfect", 
-            "achievement", "growth", "fulfillment", "bliss", "euphoria", "peace",
-            "extasis", "successful", "greatness", "incredible"
-        ]
-
+        context.update(article_highlight_word_groups())
         context["words"] = self.object.content.split(" ")
 
         return context

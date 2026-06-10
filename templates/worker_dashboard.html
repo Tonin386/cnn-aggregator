@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="fr" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Worker CNN</title>
+    <link rel="icon" href="data:,">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.5.2/flowbite.min.js"></script>
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100">
+    <header class="border-b border-slate-700 bg-slate-900">
+        <div class="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+                <p class="text-sm font-medium uppercase tracking-wide text-cyan-300">Worker CNN</p>
+                <h1 class="mt-1 text-2xl font-semibold text-white sm:text-3xl">Dashboard worker</h1>
+                <p class="mt-1 text-sm text-slate-400">Récupération automatique des articles CNN de maintenant vers le passé.</p>
+            </div>
+            <a class="inline-flex min-h-10 items-center justify-center rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-300" href="{% url 'homepage' %}">
+                Retour accueil
+            </a>
+        </div>
+    </header>
+
+    <main class="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+        <section class="rounded-lg border border-slate-700 bg-slate-900 p-4">
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                    <div class="flex items-center gap-3">
+                        <span id="statusDot" class="h-3 w-3 rounded-full bg-slate-500"></span>
+                        <span id="status" class="text-2xl font-semibold text-white">{{ state.status }}</span>
+                    </div>
+                    <p id="lastMessage" class="mt-2 text-sm text-slate-400">{{ state.last_message|default:"Aucune activité pour le moment." }}</p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button class="min-h-10 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-300" type="button" onclick="startWorker()">Démarrer</button>
+                    <button class="min-h-10 rounded-lg bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-200" type="button" onclick="stopWorker()">Arrêter</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="mt-4 grid gap-3 md:grid-cols-3">
+            <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
+                <p class="text-sm text-slate-400">Date en cours</p>
+                <p id="currentDate" class="mt-2 text-2xl font-semibold text-white">{{ state.current_date|default:"-" }}</p>
+            </div>
+            <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
+                <p class="text-sm text-slate-400">Heartbeat</p>
+                <p id="heartbeat" class="mt-2 break-words text-base font-semibold text-white">{{ state.heartbeat_at|default:"-" }}</p>
+            </div>
+            <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
+                <p class="text-sm text-slate-400">Démarré le</p>
+                <p id="startedAt" class="mt-2 break-words text-base font-semibold text-white">{{ state.started_at|default:"-" }}</p>
+            </div>
+        </section>
+
+        <section class="mt-4 grid gap-3 md:grid-cols-3">
+            <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
+                <p class="text-sm text-slate-400">URLs vues</p>
+                <p id="totalSeen" class="mt-2 text-3xl font-semibold text-cyan-200">{{ state.total_seen }}</p>
+            </div>
+            <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
+                <p class="text-sm text-slate-400">Articles créés</p>
+                <p id="totalCreated" class="mt-2 text-3xl font-semibold text-emerald-200">{{ state.total_created }}</p>
+            </div>
+            <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
+                <p class="text-sm text-slate-400">Articles mis à jour</p>
+                <p id="totalUpdated" class="mt-2 text-3xl font-semibold text-amber-200">{{ state.total_updated }}</p>
+            </div>
+        </section>
+
+        <section class="mt-4 rounded-lg border border-slate-700 bg-slate-900 p-4">
+            <h2 class="text-base font-semibold text-white">Dernière erreur</h2>
+            <pre id="lastError" class="mt-3 whitespace-pre-wrap break-words rounded-lg border border-rose-500/25 bg-rose-950/20 p-3 text-sm text-rose-200">{{ state.last_error|default:"-" }}</pre>
+        </section>
+
+        <section class="mt-4 rounded-lg border border-slate-700 bg-slate-900 p-4">
+            <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h2 class="text-base font-semibold text-white">Logs live</h2>
+                    <p class="mt-1 text-sm text-slate-400">Les 150 derniers événements du worker.</p>
+                </div>
+                <span class="w-fit rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold uppercase text-slate-300">refresh 3s</span>
+            </div>
+            <div id="logConsole" class="max-h-[420px] overflow-auto rounded-lg border border-slate-700 bg-[#0b0f14] font-mono text-sm" aria-live="polite"></div>
+        </section>
+    </main>
+
+    <script>
+        let lastLogSignature = "";
+
+        function renderWorker(data) {
+            document.querySelector("#status").textContent = data.status;
+            document.querySelector("#lastMessage").textContent = data.last_message || "Aucune activité pour le moment.";
+            document.querySelector("#currentDate").textContent = data.current_date || "-";
+            document.querySelector("#heartbeat").textContent = data.heartbeat_at || "-";
+            document.querySelector("#startedAt").textContent = data.started_at || "-";
+            document.querySelector("#totalSeen").textContent = data.total_seen;
+            document.querySelector("#totalCreated").textContent = data.total_created;
+            document.querySelector("#totalUpdated").textContent = data.total_updated;
+            document.querySelector("#lastError").textContent = data.last_error || "-";
+
+            const dot = document.querySelector("#statusDot");
+            dot.className = "h-3 w-3 rounded-full bg-slate-500";
+            if (data.status === "running") dot.classList.add("bg-emerald-400");
+            if (data.status === "error") dot.classList.add("bg-rose-400");
+            if (data.status === "stopping") dot.classList.add("bg-amber-300");
+
+            renderLogs(data.logs || []);
+        }
+
+        function renderLogs(logs) {
+            const consoleElement = document.querySelector("#logConsole");
+            const signature = logs.map((log) => `${log.created_at}|${log.level}|${log.message}`).join("\n");
+            if (signature === lastLogSignature) return;
+            lastLogSignature = signature;
+
+            consoleElement.innerHTML = "";
+            const orderedLogs = [...logs].reverse();
+            if (!orderedLogs.length) {
+                consoleElement.appendChild(buildLogLine({created_at: "", level: "info", message: "Aucun log pour le moment."}));
+                return;
+            }
+
+            for (const log of orderedLogs) {
+                consoleElement.appendChild(buildLogLine(log));
+            }
+            consoleElement.scrollTop = consoleElement.scrollHeight;
+        }
+
+        function buildLogLine(log) {
+            const line = document.createElement("div");
+            line.className = "grid gap-1 border-b border-white/5 px-3 py-2 sm:grid-cols-[180px_88px_minmax(0,1fr)] sm:gap-3";
+
+            const time = document.createElement("span");
+            time.className = "text-slate-500";
+            time.textContent = formatDate(log.created_at);
+
+            const level = document.createElement("span");
+            level.className = "font-bold uppercase";
+            level.textContent = log.level;
+            if (log.level === "success") level.classList.add("text-emerald-300");
+            else if (log.level === "warning") level.classList.add("text-amber-300");
+            else if (log.level === "error") level.classList.add("text-rose-300");
+            else level.classList.add("text-cyan-300");
+
+            const message = document.createElement("span");
+            message.className = "break-words text-slate-200";
+            message.textContent = log.message;
+
+            line.append(time, level, message);
+            return line;
+        }
+
+        function formatDate(value) {
+            if (!value) return "-";
+            return new Intl.DateTimeFormat("fr-FR", {
+                dateStyle: "short",
+                timeStyle: "medium",
+            }).format(new Date(value));
+        }
+
+        async function refreshWorker() {
+            const response = await fetch("{% url 'worker-status' %}");
+            renderWorker(await response.json());
+        }
+
+        async function startWorker() {
+            const response = await fetch("{% url 'worker-start' %}", {method: "POST"});
+            const data = await response.json();
+            renderWorker(data.worker);
+        }
+
+        async function stopWorker() {
+            const response = await fetch("{% url 'worker-stop' %}", {method: "POST"});
+            const data = await response.json();
+            renderWorker(data.worker);
+        }
+
+        refreshWorker();
+        setInterval(refreshWorker, 3000);
+    </script>
+</body>
+</html>

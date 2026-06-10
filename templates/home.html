@@ -1,122 +1,162 @@
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="dark">
+<html lang="fr" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CNN News Aggregator</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <style>
-        .sticky-bottom-div {
-            width: 10%;
-            position: fixed;
-            bottom: 10px;
-            left: 50%;
-            padding: 20px;
-            transform: translate(-50%, 0);
-            text-align: center;
-            border-radius: 10px;
-        }
-    </style>
+    <link rel="icon" href="data:,">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.5.2/flowbite.min.js"></script>
 </head>
-<body>
-    
-    <div class="container">
-        <div class="row">
-            <div class="col-12">
-                <h1 class="display-4 text-white">CNN News Aggregator</h1>
-                <h3 class="text-muted">Project for BHT Data Workflows class</h3>
+<body class="min-h-screen bg-slate-950 text-slate-100">
+    <header class="border-b border-slate-700 bg-slate-900">
+        <div class="mx-auto flex max-w-[1800px] flex-col gap-4 px-4 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+                <p class="text-sm font-medium uppercase tracking-wide text-cyan-300">CNN News Aggregator</p>
+                <h1 class="mt-1 text-2xl font-semibold text-white sm:text-3xl">Actualités disponibles</h1>
+                <p class="mt-1 text-sm text-slate-400">Articles en base, actualisés par le worker en arrière-plan.</p>
             </div>
-            <div class="col-12 mt-2 text-center">
-                <button type="button" class="btn btn-primary w-25" onclick="fetch_cnn()">Fetch last news</button>
-            </div>
-            <div class="col-12 mt-2">
-                {{ todays_topic_graph|safe }} 
-            </div>
-            <div class="col-12 mt-2">
-                {{ todays_topic_polarity_graph|safe }}
-            </div>
-            <div class="col-12 mt-2">
-                {{ todays_topic_subjectivity_graph|safe }}
-            </div>
+            <a href="{% url 'worker-dashboard' %}" class="inline-flex min-h-10 items-center justify-center rounded-lg border border-cyan-400/50 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/10 focus:outline-none focus:ring-2 focus:ring-cyan-300">
+                Dashboard worker
+            </a>
         </div>
-    </div>
-    <div class="container-fluid mt-5">
-        <div class="row">
-            <div class="col-12">
-                <h2 class="display-6 text-white">All the articles of today</h2>
-                <p>You can click on an article to see insights</p>
+    </header>
+
+    <main class="mx-auto max-w-[1800px] px-4 py-6 sm:px-6">
+        <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
+                <p class="text-sm text-slate-400">Articles filtrés</p>
+                <p class="mt-2 text-3xl font-semibold text-white">{{ total_articles }}</p>
             </div>
-            {% for article in articles %}
-            <div class="col-2 my-1">
-                <div class="card h-100">
-                    <div class="card-header">
-                        {% if bounds.0 <= article.polarity and article.polarity <= bounds.1 %}
-                        <span class="badge rounded-pill text-bg-danger">Bad news ({{article.polarity|floatformat:-2}})</span>
-                        {% elif bounds.1 < article.polarity and article.polarity <= bounds.2 %}
-                        <span class="badge rounded-pill text-bg-light">Neutral news ({{article.polarity|floatformat:-2}})</span>
-                        {% else %}
-                        <span class="badge rounded-pill text-bg-success">Good news ({{article.polarity|floatformat:-2}})</span>
-                        {% endif %}
-                        {% if article.subjectivity < 0.4 %}
-                        <span class="badge rounded-pill text-bg-info">Objective ({{article.subjectivity|floatformat:-2}})</span>
-                        {% else %}
-                        <span class="badge rounded-pill text-bg-warning">Subjective ({{article.subjectivity|floatformat:-2}})</span>
-                        {% endif %}
-                    </div>
-                    <div class="card-body">
-                        <h5 class="card-title text-white fw-bold">{{ article.title }}</h5>
-                        <h6 class="card-subtitle mb-2 fst-italic text-white">{{ article.topic|title }}</h6>
-                    </div>
-                    <div class="card-footer">
-                        <a href="{% url 'article-detail' slug=article.slug %}" class="card-link">Learn more</a>
-                        <a href="{{article.source}}" class="card-link" target="_blank">Source Link</a>
-                    </div>
+            <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
+                <p class="text-sm text-slate-400">Topics</p>
+                <p class="mt-2 text-3xl font-semibold text-white">{{ total_topics }}</p>
+            </div>
+            <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
+                <p class="text-sm text-slate-400">Polarité moyenne</p>
+                <p class="mt-2 text-3xl font-semibold text-amber-200">{{ avg_polarity|floatformat:2 }}</p>
+            </div>
+            <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
+                <p class="text-sm text-slate-400">Subjectivité moyenne</p>
+                <p class="mt-2 text-3xl font-semibold text-violet-200">{{ avg_subjectivity|floatformat:2 }}</p>
+            </div>
+        </section>
+
+        <form class="mt-5 rounded-lg border border-slate-700 bg-slate-900 p-4" method="get">
+            <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-12">
+                <div class="xl:col-span-3">
+                    <label class="mb-1 block text-sm font-medium text-slate-300" for="q">Recherche</label>
+                    <input id="q" name="q" value="{{ request.GET.q }}" placeholder="Titre d'article" class="block min-h-10 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/30">
+                </div>
+                <div class="xl:col-span-2">
+                    <label class="mb-1 block text-sm font-medium text-slate-300" for="topic">Topic</label>
+                    <select id="topic" name="topic" class="block min-h-10 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/30">
+                        <option value="">Tous</option>
+                        {% for topic in topic_options %}
+                        <option value="{{ topic }}" {% if request.GET.topic == topic %}selected{% endif %}>{{ topic|title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="xl:col-span-2">
+                    <label class="mb-1 block text-sm font-medium text-slate-300" for="sentiment">Ton</label>
+                    <select id="sentiment" name="sentiment" class="block min-h-10 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/30">
+                        <option value="">Tous</option>
+                        <option value="negative" {% if request.GET.sentiment == "negative" %}selected{% endif %}>Négatif</option>
+                        <option value="neutral" {% if request.GET.sentiment == "neutral" %}selected{% endif %}>Neutre</option>
+                        <option value="positive" {% if request.GET.sentiment == "positive" %}selected{% endif %}>Positif</option>
+                    </select>
+                </div>
+                <div class="xl:col-span-2">
+                    <label class="mb-1 block text-sm font-medium text-slate-300" for="subjectivity">Objectivité</label>
+                    <select id="subjectivity" name="subjectivity" class="block min-h-10 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/30">
+                        <option value="">Toutes</option>
+                        <option value="objective" {% if request.GET.subjectivity == "objective" %}selected{% endif %}>Objective</option>
+                        <option value="subjective" {% if request.GET.subjectivity == "subjective" %}selected{% endif %}>Subjective</option>
+                    </select>
+                </div>
+                <div class="xl:col-span-1">
+                    <label class="mb-1 block text-sm font-medium text-slate-300" for="date_from">Depuis</label>
+                    <input id="date_from" type="date" name="date_from" value="{{ request.GET.date_from }}" class="block min-h-10 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/30">
+                </div>
+                <div class="xl:col-span-1">
+                    <label class="mb-1 block text-sm font-medium text-slate-300" for="date_to">Jusqu'à</label>
+                    <input id="date_to" type="date" name="date_to" value="{{ request.GET.date_to }}" class="block min-h-10 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/30">
+                </div>
+                <div class="flex items-end xl:col-span-1">
+                    <button class="min-h-10 w-full rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-300" type="submit">Filtrer</button>
                 </div>
             </div>
+        </form>
+
+        <section class="mt-5 grid gap-4 xl:grid-cols-2">
+            <div class="min-h-[380px] overflow-hidden rounded-lg border border-slate-700 bg-slate-900 p-2">{{ topic_graph|safe }}</div>
+            <div class="min-h-[380px] overflow-hidden rounded-lg border border-slate-700 bg-slate-900 p-2">{{ sentiment_graph|safe }}</div>
+            <div class="min-h-[380px] overflow-hidden rounded-lg border border-slate-700 bg-slate-900 p-2">{{ timeline_graph|safe }}</div>
+            <div class="min-h-[380px] overflow-hidden rounded-lg border border-slate-700 bg-slate-900 p-2">{{ subjectivity_timeline_graph|safe }}</div>
+            <div class="min-h-[380px] overflow-hidden rounded-lg border border-slate-700 bg-slate-900 p-2">{{ topic_polarity_graph|safe }}</div>
+            <div class="min-h-[380px] overflow-hidden rounded-lg border border-slate-700 bg-slate-900 p-2">{{ subjectivity_graph|safe }}</div>
+        </section>
+
+        <section class="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+                <h2 class="text-xl font-semibold text-white">Articles disponibles</h2>
+                <p class="mt-1 text-sm text-slate-400">Page {{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</p>
+            </div>
+            <div class="text-sm text-slate-400">
+                Worker
+                <span class="ml-2 rounded-full border border-slate-600 bg-slate-800 px-3 py-1 text-xs font-semibold uppercase text-slate-200">{{ worker_state.status }}</span>
+                {% if worker_state.current_date %}<span class="ml-2">{{ worker_state.current_date }}</span>{% endif %}
+            </div>
+        </section>
+
+        <section class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            {% for article in articles %}
+            <article class="flex min-h-[220px] flex-col rounded-lg border border-slate-700 bg-slate-900">
+                <div class="flex flex-wrap gap-2 border-b border-slate-700 p-3">
+                    {% if bounds.0 <= article.polarity and article.polarity <= bounds.1 %}
+                    <span class="rounded-full bg-rose-500/15 px-3 py-1 text-xs font-semibold text-rose-200">Négatif {{ article.polarity|floatformat:2 }}</span>
+                    {% elif bounds.1 < article.polarity and article.polarity <= bounds.2 %}
+                    <span class="rounded-full bg-slate-500/15 px-3 py-1 text-xs font-semibold text-slate-200">Neutre {{ article.polarity|floatformat:2 }}</span>
+                    {% else %}
+                    <span class="rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-200">Positif {{ article.polarity|floatformat:2 }}</span>
+                    {% endif %}
+                    {% if article.subjectivity < 0.4 %}
+                    <span class="rounded-full bg-cyan-500/15 px-3 py-1 text-xs font-semibold text-cyan-200">Objectif {{ article.subjectivity|floatformat:2 }}</span>
+                    {% else %}
+                    <span class="rounded-full bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-200">Subjectif {{ article.subjectivity|floatformat:2 }}</span>
+                    {% endif %}
+                </div>
+                <div class="flex flex-1 flex-col p-4">
+                    <h3 class="text-base font-semibold leading-snug text-white">{{ article.title }}</h3>
+                    <p class="mt-3 text-sm italic text-slate-400">{{ article.topic|title }}</p>
+                    {% if article.published_date %}
+                    <p class="mt-2 text-xs text-slate-500">{{ article.published_date }}</p>
+                    {% endif %}
+                    <div class="mt-auto flex gap-4 pt-4 text-sm font-semibold">
+                        <a href="{% url 'article-detail' slug=article.slug %}" class="text-cyan-300 hover:text-cyan-200">Détails</a>
+                        <a href="{{ article.source }}" class="text-slate-300 hover:text-white" target="_blank" rel="noreferrer">Source</a>
+                    </div>
+                </div>
+            </article>
+            {% empty %}
+            <div class="rounded-lg border border-slate-700 bg-slate-900 p-6 text-slate-400 md:col-span-2 xl:col-span-3 2xl:col-span-4">
+                Aucun article ne correspond à ces filtres.
+            </div>
             {% endfor %}
-        </div>
-    </div>
-    
-    <div class="sticky-bottom-div m-auto bg-secondary d-none">
-        <div class="spinner-border text-primary" role="status">
-        </div>
-        <p class="text-white">Fetching last news...</p>
-    </div>
-    
-    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
-    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
-    
-    <script>
-        async function fetch_cnn() {
-            let loading_div = document.querySelector(".sticky-bottom-div");
-            $(loading_div).toggleClass("d-none");
-            const url = window.location.origin + "/sync/";
-            let request = {
-                method: "GET",
-                headers: {
-                    "Accept": "application/json",
-                    "Content-type": "application/json; charset=UTF-8",
-                    'X-Requested-With': 'XMLHttpRequest',
-                }
-            }
-            
-            try {
-                let response = await fetch(url, request);
-                if(!response.ok) {
-                    throw new Error('Failed to fetch api response');
-                }
-                
-                const data = await response.json();
-                window.location.reload()
-                return data;
-            }
-            catch (error){
-                console.log(error);
-            }
-        }
-    </script>
+        </section>
+
+        {% if page_obj.paginator.num_pages > 1 %}
+        <nav class="mt-6 flex items-center justify-center gap-2" aria-label="Pagination articles">
+            {% if page_obj.has_previous %}
+            <a class="rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800" href="?{% if filter_querystring %}{{ filter_querystring }}&{% endif %}page={{ page_obj.previous_page_number }}">Précédent</a>
+            {% endif %}
+            <span class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950">{{ page_obj.number }}</span>
+            {% if page_obj.has_next %}
+            <a class="rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800" href="?{% if filter_querystring %}{{ filter_querystring }}&{% endif %}page={{ page_obj.next_page_number }}">Suivant</a>
+            {% endif %}
+        </nav>
+        {% endif %}
+    </main>
 </body>
 </html>

@@ -1,0 +1,8 @@
+{
+  "objective_cues": [
+    "according", "analysis", "announced", "audit", "confirmed", "data", "document", "documents", "evidence", "figure", "figures", "filing", "official", "officials", "percent", "poll", "records", "reported", "report", "said", "source", "sources", "statement", "statistics", "study", "survey", "testimony", "told"
+  ],
+  "subjective_cues": [
+    "allegedly", "awful", "beautiful", "best", "clearly", "could", "disgrace", "extraordinary", "horrible", "incredible", "likely", "may", "might", "must", "opinion", "perhaps", "probably", "remarkable", "seems", "shocking", "should", "stunning", "terrible", "worst"
+  ]
+}
