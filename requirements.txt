@@ -7,3 +7,4 @@ plotly
 requests
 textblob
 wordcloud==1.9.6
+langdetect==1.0.9

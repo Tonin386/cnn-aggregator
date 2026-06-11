@@ -7,15 +7,14 @@ from django.utils import timezone
 
 from cnn_aggregator.models import Article, WorkerLog, WorkerState
 from cnn_aggregator.utils import (
-    cnn_article_sitemap_index_urls,
-    cnn_article_urls_from_sitemap,
-    retrieve_cnn_articles_for_date,
+    clear_source_discovery_caches,
+    retrieve_all_articles_for_date,
     update_article_scores,
 )
 
 
 class Command(BaseCommand):
-    help = "Fetch CNN articles from today backwards, keeping progress in WorkerState."
+    help = "Fetch articles from historical news sources from today backwards, keeping progress in WorkerState."
 
     def add_arguments(self, parser):
         parser.add_argument("--start-date", help="Date to start from, formatted as YYYY-MM-DD.")
@@ -53,7 +52,7 @@ class Command(BaseCommand):
         state.stop_requested = False
         state.save()
 
-        self._log(state, f"CNN worker started on {current_date.isoformat()}", WorkerLog.LEVEL_SUCCESS)
+        self._log(state, f"News worker started on {current_date.isoformat()}", WorkerLog.LEVEL_SUCCESS)
         if options["rescore_existing"]:
             self._rescore_existing_articles(state)
             if options["once"]:
@@ -81,13 +80,13 @@ class Command(BaseCommand):
                 state.status = WorkerState.STATUS_RUNNING
                 state.current_date = current_date
                 state.heartbeat_at = timezone.now()
-                state.last_message = f"Fetching articles for {current_date.isoformat()}"
+                state.last_message = f"Fetching all sources for {current_date.isoformat()}"
                 state.save()
                 self._log(state, state.last_message)
 
-                stats = retrieve_cnn_articles_for_date(
+                stats = retrieve_all_articles_for_date(
                     current_date,
-                    limit=options.get("limit_per_day"),
+                    limit_per_source=options.get("limit_per_day"),
                     log_callback=lambda message, level=WorkerLog.LEVEL_INFO: self._log(
                         state,
                         message,
@@ -102,7 +101,7 @@ class Command(BaseCommand):
                 state.heartbeat_at = timezone.now()
                 state.last_message = (
                     f"{current_date.isoformat()}: "
-                    f"{stats['discovered']} discovered from {stats['sitemaps']} sitemaps, "
+                    f"{stats['discovered']} discovered from all sources, "
                     f"{stats['created']} created, {stats['updated']} updated, "
                     f"{stats['skipped']} skipped, {stats['errors']} errors."
                 )
@@ -179,8 +178,7 @@ class Command(BaseCommand):
         return dates, latest_date
 
     def _clear_sitemap_caches(self):
-        cnn_article_sitemap_index_urls.cache_clear()
-        cnn_article_urls_from_sitemap.cache_clear()
+        clear_source_discovery_caches()
 
     def _rescore_existing_articles(self, state):
         total = Article.objects.count()
@@ -235,9 +233,9 @@ class Command(BaseCommand):
             state.save()
             self._log(state, state.last_message)
 
-            stats = retrieve_cnn_articles_for_date(
+            stats = retrieve_all_articles_for_date(
                 target_date,
-                limit=options.get("limit_per_day"),
+                limit_per_source=options.get("limit_per_day"),
                 log_callback=lambda message, level=WorkerLog.LEVEL_INFO: self._log(
                     state,
                     message,

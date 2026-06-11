@@ -7,10 +7,23 @@ from cnn_aggregator.management.commands.run_cnn_worker import Command
 
 from .models import Article, WorkerState
 from .utils import (
+    OBJECTIVE_CUES,
+    OBJECTIVE_PHRASE_SIGNAL_WEIGHT,
+    OBJECTIVE_PHRASES,
+    OBJECTIVE_SUBJECTIVITY_WEIGHT,
+    SUBJECTIVE_CUES,
+    SUBJECTIVE_PHRASE_SIGNAL_WEIGHT,
+    SUBJECTIVE_PHRASES,
+    SUBJECTIVE_SUBJECTIVITY_WEIGHT,
+    SUBJECTIVITY_OBJECTIVE_BALANCE,
+    HISTORICAL_NEWS_SOURCES,
     analyze_sentiment,
+    article_word_score_annotations,
     classify_subjectivity,
     repeated_term_weight,
+    retrieve_all_articles_for_date,
     sentiment_contributions,
+    rss_items,
 )
 from .views import apply_article_filters, build_word_cloud_visual, word_cloud_rows
 
@@ -48,6 +61,16 @@ class SentimentAnalysisTests(SimpleTestCase):
         self.assertEqual(protected["occurrences"], 3)
         self.assertLess(protected["total_weight"], 3)
         self.assertGreater(protected["contribution"], 0)
+        self.assertIn("subjectivity_contribution", protected)
+
+    def test_article_word_annotations_include_real_polarity_and_subjectivity_scores(self):
+        annotations = article_word_score_annotations("Officials said progress was protected.")
+        scored_words = {item["token"]: item for item in annotations if item.get("has_score")}
+
+        self.assertIn("officials", scored_words)
+        self.assertIn("progress", scored_words)
+        self.assertLess(scored_words["officials"]["subjectivity"], 0)
+        self.assertGreater(scored_words["progress"]["polarity"], 0)
 
     def test_subjectivity_is_lower_for_sourced_factual_copy(self):
         _, factual_subjectivity = analyze_sentiment(
@@ -68,6 +91,16 @@ class SentimentAnalysisTests(SimpleTestCase):
         self.assertEqual(classify_subjectivity(0.30), "Insuffisamment objectif")
         self.assertEqual(classify_subjectivity(0.4999), "Insuffisamment objectif")
         self.assertEqual(classify_subjectivity(0.50), "Subjectif")
+
+    def test_subjectivity_lexicon_masses_are_balanced(self):
+        objective_mass = OBJECTIVE_SUBJECTIVITY_WEIGHT * SUBJECTIVITY_OBJECTIVE_BALANCE * (
+            len(OBJECTIVE_CUES) + OBJECTIVE_PHRASE_SIGNAL_WEIGHT * len(OBJECTIVE_PHRASES)
+        )
+        subjective_mass = SUBJECTIVE_SUBJECTIVITY_WEIGHT * (
+            len(SUBJECTIVE_CUES) + SUBJECTIVE_PHRASE_SIGNAL_WEIGHT * len(SUBJECTIVE_PHRASES)
+        )
+
+        self.assertAlmostEqual(objective_mass, subjective_mass)
 
 
 class WorkerFreshnessTests(TestCase):
@@ -142,6 +175,69 @@ class WorkerFreshnessTests(TestCase):
         self.assertIn("--rescore-existing", command)
         self.assertNotIn("--once", command)
 
+    @patch("cnn_aggregator.utils.retrieve_historical_articles_for_source")
+    @patch("cnn_aggregator.utils.retrieve_cnn_articles_for_date")
+    def test_all_source_retrieval_runs_each_historical_source_for_the_same_date(self, cnn_fetch, historical_fetch):
+        target_date = date.today()
+        cnn_fetch.return_value = {
+            "source": "CNN",
+            "target_date": target_date,
+            "seen": 1,
+            "created": 1,
+            "updated": 0,
+            "skipped": 0,
+            "errors": 0,
+            "discovered": 1,
+            "sitemaps": 1,
+            "last_url": "https://cnn.example/article",
+        }
+        historical_fetch.side_effect = lambda source_config, target_date, limit=None, log_callback=None: {
+            "source": source_config["name"],
+            "target_date": target_date,
+            "seen": 1,
+            "created": 1,
+            "updated": 0,
+            "skipped": 0,
+            "errors": 0,
+            "discovered": 1,
+            "sitemaps": 1,
+            "last_url": f"https://{source_config['name'].lower().replace(' ', '-')}.example/article",
+        }
+
+        stats = retrieve_all_articles_for_date(target_date, limit_per_source=5)
+
+        cnn_fetch.assert_called_once_with(target_date, limit=5, log_callback=None)
+        self.assertEqual(historical_fetch.call_count, len(HISTORICAL_NEWS_SOURCES) - 1)
+        self.assertEqual(stats["created"], len(HISTORICAL_NEWS_SOURCES))
+        self.assertEqual(stats["discovered"], len(HISTORICAL_NEWS_SOURCES))
+        self.assertEqual(
+            stats["sources"],
+            [source_config["name"] for source_config in HISTORICAL_NEWS_SOURCES],
+        )
+
+    def test_rss_items_keep_publication_dates_for_day_by_day_fetching(self):
+        feed = b"""
+        <rss><channel>
+            <item>
+                <title>Today story</title>
+                <link>https://example.com/today</link>
+                <pubDate>Thu, 11 Jun 2026 10:00:00 GMT</pubDate>
+                <description>Summary</description>
+            </item>
+            <item>
+                <title>Yesterday story</title>
+                <link>https://example.com/yesterday</link>
+                <pubDate>Wed, 10 Jun 2026 10:00:00 GMT</pubDate>
+                <description>Summary</description>
+            </item>
+        </channel></rss>
+        """
+
+        items = rss_items(feed)
+
+        self.assertEqual(items[0]["published_date"], date(2026, 6, 11))
+        self.assertEqual(items[1]["published_date"], date(2026, 6, 10))
+
 
 class ArticleFilterTests(TestCase):
     def test_subjectivity_filters_use_three_labels(self):
@@ -185,6 +281,23 @@ class ArticleFilterTests(TestCase):
             apply_article_filters(Article.objects.all(), {"subjectivity": "subjective"}),
             [subjective],
         )
+
+    def test_article_detail_renders_inline_score_badges(self):
+        article = Article.objects.create(
+            title="Progress confirmed",
+            topic="world",
+            content="Officials said progress was protected.",
+            polarity=0.2,
+            subjectivity=0.2,
+            source="https://example.com/detail",
+            published_date=date.today(),
+        )
+
+        response = Client(SERVER_NAME="localhost").get(f"/article/{article.slug}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "P +")
+        self.assertContains(response, "Subjectivité:")
 
     def test_word_cloud_rows_include_frequency_and_indicator_scores(self):
         Article.objects.create(

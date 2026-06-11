@@ -3,6 +3,7 @@ from django.utils.text import slugify
 
 class Article(models.Model):
     title = models.CharField("Title", max_length=200)
+    publisher = models.CharField("Publisher", max_length=80, default="CNN", db_index=True)
     topic = models.CharField("Topic", max_length=200)
     content = models.TextField("Content")
     polarity = models.FloatField("Polarity score")
@@ -32,6 +33,7 @@ class Article(models.Model):
         ordering = ["-published_date", "-fetch_date", "-id"]
         indexes = [
             models.Index(fields=["topic", "published_date"]),
+            models.Index(fields=["publisher", "published_date"]),
             models.Index(fields=["polarity"]),
             models.Index(fields=["subjectivity"]),
         ]
@@ -68,7 +70,7 @@ class WorkerState(models.Model):
         return state
 
     def __str__(self):
-        return f"CNN worker: {self.status}"
+        return f"News worker: {self.status}"
 
 
 class WorkerLog(models.Model):

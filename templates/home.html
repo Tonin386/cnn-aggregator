@@ -34,7 +34,7 @@
     </header>
 
     <main class="mx-auto max-w-[1800px] px-4 py-6 sm:px-6">
-        <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
                 <p class="text-sm text-slate-400">Articles filtrés</p>
                 <div class="mt-2 flex items-baseline gap-2">
@@ -49,6 +49,10 @@
                     <p class="text-3xl font-semibold text-white">{{ total_topics }}</p>
                     <span id="delta-topics" class="hidden rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums"></span>
                 </div>
+            </div>
+            <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
+                <p class="text-sm text-slate-400">Sources</p>
+                <p class="mt-2 text-3xl font-semibold text-emerald-200">{{ total_sources }}</p>
             </div>
             <div class="rounded-lg border border-slate-700 bg-slate-900 p-4">
                 <p class="text-sm text-slate-400">Polarité moyenne</p>
@@ -78,6 +82,15 @@
                         <option value="">Tous</option>
                         {% for topic in topic_options %}
                         <option value="{{ topic }}" {% if request.GET.topic == topic %}selected{% endif %}>{{ topic|title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="xl:col-span-2">
+                    <label class="mb-1 block text-sm font-medium text-slate-300" for="source">Source</label>
+                    <select id="source" name="source" class="block min-h-10 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/30">
+                        <option value="">Toutes</option>
+                        {% for source in source_options %}
+                        <option value="{{ source }}" {% if request.GET.source == source %}selected{% endif %}>{{ source }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -120,6 +133,8 @@
             <div class="min-h-[380px] overflow-hidden rounded-lg border border-slate-700 bg-slate-900 p-2">{{ subjectivity_timeline_graph|safe }}</div>
             <div class="min-h-[380px] overflow-hidden rounded-lg border border-slate-700 bg-slate-900 p-2">{{ topic_polarity_graph|safe }}</div>
             <div class="min-h-[380px] overflow-hidden rounded-lg border border-slate-700 bg-slate-900 p-2">{{ subjectivity_graph|safe }}</div>
+            <div class="min-h-[380px] overflow-hidden rounded-lg border border-slate-700 bg-slate-900 p-2">{{ source_graph|safe }}</div>
+            <div class="min-h-[380px] overflow-hidden rounded-lg border border-slate-700 bg-slate-900 p-2">{{ source_scores_graph|safe }}</div>
         </section>
 
         <section class="mt-4 rounded-lg border border-slate-700 bg-slate-900">
@@ -203,7 +218,7 @@
                 </div>
                 <div class="flex flex-1 flex-col p-4">
                     <h3 class="text-base font-semibold leading-snug text-white">{{ article.title }}</h3>
-                    <p class="mt-3 text-sm italic text-slate-400">{{ article.topic|title }}</p>
+                    <p class="mt-3 text-sm italic text-slate-400">{{ article.publisher }} · {{ article.topic|title }}</p>
                     {% if article.published_date %}
                     <p class="mt-2 text-xs text-slate-500">{{ article.published_date }}</p>
                     {% endif %}

@@ -15,6 +15,7 @@
             <h1 class="mt-4 text-2xl font-semibold leading-tight text-white sm:text-4xl">{{ article.title }}</h1>
             <div class="mt-4 flex flex-wrap gap-2">
                 <span class="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold uppercase text-slate-300">{{ article.topic|title }}</span>
+                <span class="rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-semibold uppercase text-emerald-200">{{ article.publisher }}</span>
                 {% if article.published_date %}
                 <span class="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold uppercase text-slate-300">{{ article.published_date }}</span>
                 {% endif %}
@@ -66,7 +67,8 @@
                             <th class="px-4 py-3 text-right font-semibold">Occurrences</th>
                             <th class="px-4 py-3 text-right font-semibold">Poids retenu</th>
                             <th class="px-4 py-3 text-right font-semibold">Score moyen</th>
-                            <th class="px-4 py-3 text-right font-semibold">Contribution</th>
+                            <th class="px-4 py-3 text-right font-semibold">Polarité</th>
+                            <th class="px-4 py-3 text-right font-semibold">Subjectivité</th>
                             <th class="px-5 py-3 font-semibold">Contexte</th>
                         </tr>
                     </thead>
@@ -79,12 +81,21 @@
                             <td class="px-4 py-3 text-right tabular-nums text-slate-300">{{ item.total_weight|floatformat:2 }}</td>
                             <td class="px-4 py-3 text-right tabular-nums text-slate-300">{{ item.average_score|floatformat:3 }}</td>
                             <td class="px-4 py-3 text-right tabular-nums">
-                                {% if item.contribution > 0 %}
-                                <span class="font-semibold text-emerald-300">+{{ item.contribution|floatformat:3 }}</span>
-                                {% elif item.contribution < 0 %}
-                                <span class="font-semibold text-rose-300">{{ item.contribution|floatformat:3 }}</span>
+                                {% if item.polarity_contribution > 0 %}
+                                <span class="font-semibold text-emerald-300">+{{ item.polarity_contribution|floatformat:4 }}</span>
+                                {% elif item.polarity_contribution < 0 %}
+                                <span class="font-semibold text-rose-300">{{ item.polarity_contribution|floatformat:4 }}</span>
                                 {% else %}
-                                <span class="text-slate-400">{{ item.contribution|floatformat:3 }}</span>
+                                <span class="text-slate-400">{{ item.polarity_contribution|floatformat:4 }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 text-right tabular-nums">
+                                {% if item.subjectivity_contribution > 0 %}
+                                <span class="font-semibold text-pink-300">+{{ item.subjectivity_contribution|floatformat:4 }}</span>
+                                {% elif item.subjectivity_contribution < 0 %}
+                                <span class="font-semibold text-sky-300">{{ item.subjectivity_contribution|floatformat:4 }}</span>
+                                {% else %}
+                                <span class="text-slate-400">{{ item.subjectivity_contribution|floatformat:4 }}</span>
                                 {% endif %}
                             </td>
                             <td class="px-5 py-3">
@@ -109,19 +120,32 @@
         </section>
 
         <article class="mt-5 rounded-lg border border-slate-700 bg-slate-900 p-5 leading-8 text-slate-200">
-            {% for word in words %}
-                {% if word in disturbing %}
-                <span class="mx-0.5 inline-flex rounded bg-rose-500/25 px-1.5 py-0.5 font-semibold text-rose-100">{{ word }}<sup class="ml-1 text-xs text-rose-200">-0.1</sup></span>
-                {% elif word in negative %}
-                <span class="mx-0.5 inline-flex rounded bg-rose-500/15 px-1.5 py-0.5 font-semibold text-rose-100">{{ word }}<sup class="ml-1 text-xs text-rose-200">-0.05</sup></span>
-                {% elif word in neutral %}
-                <span class="mx-0.5 inline-flex rounded bg-slate-500/20 px-1.5 py-0.5 font-semibold text-slate-100">{{ word }}<sup class="ml-1 text-xs text-slate-300">0</sup></span>
-                {% elif word in positive %}
-                <span class="mx-0.5 inline-flex rounded bg-emerald-500/15 px-1.5 py-0.5 font-semibold text-emerald-100">{{ word }}<sup class="ml-1 text-xs text-emerald-200">+0.05</sup></span>
-                {% elif word in optimistic %}
-                <span class="mx-0.5 inline-flex rounded bg-emerald-500/25 px-1.5 py-0.5 font-semibold text-emerald-100">{{ word }}<sup class="ml-1 text-xs text-emerald-200">+0.1</sup></span>
+            {% for word in annotated_words %}
+                {% if word.space %}
+                {{ word.text }}
+                {% elif word.has_score %}
+                    {% if word.polarity < 0 %}
+                    <span class="group relative mx-0.5 inline-flex rounded bg-rose-500/15 px-1.5 py-0.5 font-semibold text-rose-100 ring-1 ring-rose-400/20">
+                    {% elif word.polarity > 0 %}
+                    <span class="group relative mx-0.5 inline-flex rounded bg-emerald-500/15 px-1.5 py-0.5 font-semibold text-emerald-100 ring-1 ring-emerald-400/20">
+                    {% elif word.subjectivity < 0 %}
+                    <span class="group relative mx-0.5 inline-flex rounded bg-sky-500/15 px-1.5 py-0.5 font-semibold text-sky-100 ring-1 ring-sky-400/20">
+                    {% else %}
+                    <span class="group relative mx-0.5 inline-flex rounded bg-pink-500/15 px-1.5 py-0.5 font-semibold text-pink-100 ring-1 ring-pink-400/20">
+                    {% endif %}
+                        {{ word.text }}
+                        <span class="ml-1 inline-flex gap-1 text-[0.68rem] font-semibold tabular-nums">
+                            {% if word.polarity > 0 %}<span class="text-emerald-200">P +{{ word.polarity|floatformat:4 }}</span>{% elif word.polarity < 0 %}<span class="text-rose-200">P {{ word.polarity|floatformat:4 }}</span>{% endif %}
+                            {% if word.subjectivity > 0 %}<span class="text-pink-200">S +{{ word.subjectivity|floatformat:4 }}</span>{% elif word.subjectivity < 0 %}<span class="text-sky-200">S {{ word.subjectivity|floatformat:4 }}</span>{% endif %}
+                        </span>
+                        <span class="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden w-max max-w-xs -translate-x-1/2 rounded border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-medium leading-5 text-slate-200 shadow-xl group-hover:block">
+                            Polarité: {{ word.polarity|floatformat:4 }}<br>
+                            Subjectivité: {{ word.subjectivity|floatformat:4 }}
+                            {% if word.modifiers %}<br>Modificateurs: {{ word.modifiers|join:", " }}{% endif %}
+                        </span>
+                    </span>
                 {% else %}
-                {{ word }}
+                {{ word.text }}
                 {% endif %}
             {% endfor %}
         </article>

@@ -19,7 +19,7 @@ from .utils import (
     SUBJECTIVITY_SUBJECTIVE_THRESHOLD,
     SUBJECTIVE_CUES,
     WORD_PATTERN,
-    article_highlight_word_groups,
+    article_word_score_annotations,
     sentiment_contributions,
 )
 from .models import Article, WorkerLog, WorkerState
@@ -31,6 +31,7 @@ import sys
 def home(request):
     articles_queryset = apply_article_filters(Article.objects.all(), request.GET)
     topic_options = Article.objects.order_by("topic").values_list("topic", flat=True).distinct()
+    source_options = Article.objects.order_by("publisher").values_list("publisher", flat=True).distinct()
     paginator = Paginator(articles_queryset, 16)
     page_obj = paginator.get_page(request.GET.get("page"))
     articles = page_obj.object_list
@@ -42,10 +43,13 @@ def home(request):
     subjectivity_timeline_graph = build_subjectivity_timeline_graph(articles_queryset)
     topic_polarity_graph = build_topic_polarity_graph(articles_queryset)
     subjectivity_graph = build_subjectivity_graph(articles_queryset)
+    source_graph = build_source_graph(articles_queryset)
+    source_scores_graph = build_source_scores_graph(articles_queryset)
     word_cloud_visual = build_word_cloud_visual(articles_queryset)
 
     total_articles = articles_queryset.count()
     total_topics = articles_queryset.values("topic").distinct().count()
+    total_sources = articles_queryset.values("publisher").distinct().count()
     avg_polarity = articles_queryset.aggregate(value=Avg("polarity"))["value"] or 0
     avg_subjectivity = articles_queryset.aggregate(value=Avg("subjectivity"))["value"] or 0
     global_article_count = Article.objects.count()
@@ -73,6 +77,7 @@ def home(request):
 def apply_article_filters(queryset, params):
     query = params.get("q", "").strip()
     topic = params.get("topic", "").strip()
+    publisher = params.get("source", "").strip()
     date_from = params.get("date_from", "").strip()
     date_to = params.get("date_to", "").strip()
     sentiment = params.get("sentiment", "").strip()
@@ -82,6 +87,8 @@ def apply_article_filters(queryset, params):
         queryset = queryset.filter(title__icontains=query)
     if topic:
         queryset = queryset.filter(topic=topic)
+    if publisher:
+        queryset = queryset.filter(publisher=publisher)
     if date_from:
         queryset = queryset.filter(published_date__gte=date_from)
     if date_to:
@@ -143,6 +150,48 @@ def build_sentiment_graph(queryset):
         marker=dict(colors=["#fa5252", "#dee2e6", "#51cf66"]),
     )])
     fig.update_layout(title="Répartition du ton")
+    return plot(fig)
+
+def build_source_graph(queryset):
+    rows = list(queryset.values("publisher").annotate(total=Count("id")).order_by("-total"))
+    fig = go.Figure(data=[go.Bar(
+        x=[row["publisher"] for row in rows],
+        y=[row["total"] for row in rows],
+        marker_color="#38d9a9",
+        text=[row["total"] for row in rows],
+        textposition="outside",
+    )])
+    fig.update_layout(title="Articles par source", xaxis_title="", yaxis_title="Articles")
+    return plot(fig)
+
+def build_source_scores_graph(queryset):
+    rows = list(
+        queryset
+        .values("publisher")
+        .annotate(polarity=Avg("polarity"), subjectivity=Avg("subjectivity"), total=Count("id"))
+        .order_by("-total")
+    )
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=[row["publisher"] for row in rows],
+        y=[row["polarity"] or 0 for row in rows],
+        name="Polarité moyenne",
+        marker_color="#ffd43b",
+    ))
+    fig.add_trace(go.Bar(
+        x=[row["publisher"] for row in rows],
+        y=[row["subjectivity"] or 0 for row in rows],
+        name="Subjectivité moyenne",
+        marker_color="#c084fc",
+    ))
+    fig.update_layout(
+        title="Scores moyens par source",
+        xaxis_title="",
+        yaxis_title="Score",
+        yaxis=dict(range=[-1, 1]),
+        barmode="group",
+        legend=dict(orientation="h"),
+    )
     return plot(fig)
 
 def build_timeline_graph(queryset):
@@ -471,8 +520,7 @@ class ArticleDetailView(DetailView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context.update(article_highlight_word_groups())
-        context["words"] = self.object.content.split(" ")
+        context["annotated_words"] = article_word_score_annotations(self.object.content)
         context["sentiment_contributions"] = sentiment_contributions(
             f"{self.object.title}. {self.object.content}"
         )
