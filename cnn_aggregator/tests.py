@@ -12,7 +12,7 @@ from .utils import (
     repeated_term_weight,
     sentiment_contributions,
 )
-from .views import apply_article_filters
+from .views import apply_article_filters, build_word_cloud_visual, word_cloud_rows
 
 
 class SentimentAnalysisTests(SimpleTestCase):
@@ -185,3 +185,40 @@ class ArticleFilterTests(TestCase):
             apply_article_filters(Article.objects.all(), {"subjectivity": "subjective"}),
             [subjective],
         )
+
+    def test_word_cloud_rows_include_frequency_and_indicator_scores(self):
+        Article.objects.create(
+            title="Officials report progress",
+            topic="world",
+            content="Officials said progress was confirmed. Critics say it is terrible.",
+            polarity=0,
+            subjectivity=0.4,
+            source="https://example.com/cloud",
+            published_date=date.today(),
+        )
+
+        rows = word_cloud_rows(Article.objects.all())
+        by_word = {row["word"]: row for row in rows}
+
+        self.assertIn("progress", by_word)
+        self.assertIn("officials", by_word)
+        self.assertIn("critics", by_word)
+        self.assertGreater(by_word["progress"]["polarity_score"], 0)
+        self.assertLess(by_word["officials"]["subjectivity_score"], 0)
+        self.assertGreater(by_word["critics"]["subjectivity_score"], 0)
+
+    def test_word_cloud_visual_renders_image_and_rows(self):
+        Article.objects.create(
+            title="Officials report progress",
+            topic="world",
+            content="Officials said progress was confirmed. Critics say it is terrible.",
+            polarity=0,
+            subjectivity=0.4,
+            source="https://example.com/cloud-plot",
+            published_date=date.today(),
+        )
+
+        visual = build_word_cloud_visual(Article.objects.all())
+
+        self.assertTrue(visual["image_url"].startswith("data:image/png;base64,"))
+        self.assertIn("progress", [row["word"] for row in visual["rows"]])

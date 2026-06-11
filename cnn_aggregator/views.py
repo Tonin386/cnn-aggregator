@@ -1,15 +1,24 @@
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic.detail import DetailView
 from django.core.paginator import Paginator
-from django.db.models import Avg, Count
+from django.core.cache import cache
+from django.db.models import Avg, Count, Max
 from django.utils import timezone
 from django.http import JsonResponse
 from django.shortcuts import render
 import plotly.graph_objs as go
 import plotly.offline as pyo
+from io import BytesIO
+import base64
+import hashlib
+from wordcloud import WordCloud
 from .utils import (
+    OBJECTIVE_CUES,
+    SENTIMENT_LEXICON,
     SUBJECTIVITY_OBJECTIVE_THRESHOLD,
     SUBJECTIVITY_SUBJECTIVE_THRESHOLD,
+    SUBJECTIVE_CUES,
+    WORD_PATTERN,
     article_highlight_word_groups,
     sentiment_contributions,
 )
@@ -33,6 +42,7 @@ def home(request):
     subjectivity_timeline_graph = build_subjectivity_timeline_graph(articles_queryset)
     topic_polarity_graph = build_topic_polarity_graph(articles_queryset)
     subjectivity_graph = build_subjectivity_graph(articles_queryset)
+    word_cloud_visual = build_word_cloud_visual(articles_queryset)
 
     total_articles = articles_queryset.count()
     total_topics = articles_queryset.values("topic").distinct().count()
@@ -232,6 +242,135 @@ def build_subjectivity_timeline_graph(queryset):
         bargap=0.25,
     )
     return plot(fig)
+
+WORD_CLOUD_ARTICLE_LIMIT = 350
+WORD_CLOUD_CACHE_SECONDS = 300
+
+def word_cloud_rows(queryset, limit=70, article_limit=WORD_CLOUD_ARTICLE_LIMIT):
+    words = {}
+    article_rows = queryset.values_list("title", "content")[:article_limit]
+
+    for title, content in article_rows:
+        tokens = WORD_PATTERN.findall(f"{title or ''} {content or ''}".lower())
+        seen_in_article = set()
+        for token in tokens:
+            polarity_score = SENTIMENT_LEXICON.get(token, 0)
+            subjectivity_score = 0
+            if token in OBJECTIVE_CUES:
+                subjectivity_score -= 0.35
+            if token in SUBJECTIVE_CUES:
+                subjectivity_score += 0.45
+
+            if polarity_score == 0 and subjectivity_score == 0:
+                continue
+
+            row = words.setdefault(
+                token,
+                {
+                    "word": token,
+                    "count": 0,
+                    "article_count": 0,
+                    "polarity_score": polarity_score,
+                    "subjectivity_score": subjectivity_score,
+                },
+            )
+            row["count"] += 1
+            if token not in seen_in_article:
+                row["article_count"] += 1
+                seen_in_article.add(token)
+
+    for row in words.values():
+        polarity_impact = abs(row["polarity_score"]) * row["count"]
+        subjectivity_impact = abs(row["subjectivity_score"]) * row["count"]
+        row["impact"] = polarity_impact + subjectivity_impact
+        row["dominant_impact"] = max(polarity_impact, subjectivity_impact)
+        row["category"] = word_cloud_category(row, polarity_impact, subjectivity_impact)
+
+    return sorted(
+        words.values(),
+        key=lambda row: (row["impact"], row["article_count"], row["count"]),
+        reverse=True,
+    )[:limit]
+
+def word_cloud_category(row, polarity_impact, subjectivity_impact):
+    if subjectivity_impact > polarity_impact:
+        return "Objectivité" if row["subjectivity_score"] < 0 else "Subjectivité"
+    if row["polarity_score"] > 0:
+        return "Polarité positive"
+    if row["polarity_score"] < 0:
+        return "Polarité négative"
+    return "Mixte"
+
+def word_cloud_color(category):
+    return {
+        "Polarité positive": "#69db7c",
+        "Polarité négative": "#ff8787",
+        "Objectivité": "#7dd3fc",
+        "Subjectivité": "#c084fc",
+    }.get(category, "#ffd43b")
+
+def word_cloud_cache_key(queryset):
+    aggregate = queryset.aggregate(total=Count("id"), latest_update=Max("updated_at"))
+    raw_key = "|".join([
+        str(queryset.query),
+        str(aggregate["total"] or 0),
+        str(aggregate["latest_update"] or ""),
+        str(WORD_CLOUD_ARTICLE_LIMIT),
+    ])
+    return f"word-cloud:{hashlib.md5(raw_key.encode('utf-8')).hexdigest()}"
+
+def build_word_cloud_visual(queryset):
+    cache_key = word_cloud_cache_key(queryset)
+    cached_visual = cache.get(cache_key)
+    if cached_visual is not None:
+        return cached_visual
+
+    rows = word_cloud_rows(queryset)
+    if not rows:
+        empty_visual = {"image_url": "", "rows": [], "article_limit": WORD_CLOUD_ARTICLE_LIMIT}
+        cache.set(cache_key, empty_visual, WORD_CLOUD_CACHE_SECONDS)
+        return empty_visual
+
+    categories_by_word = {
+        row["word"]: row["category"]
+        for row in rows
+    }
+    frequencies = {
+        row["word"]: float(row["impact"])
+        for row in rows
+        if row["impact"] > 0
+    }
+
+    cloud = WordCloud(
+        width=1100,
+        height=380,
+        background_color=None,
+        mode="RGBA",
+        prefer_horizontal=0.92,
+        collocations=False,
+        max_words=60,
+        min_font_size=12,
+        max_font_size=76,
+        relative_scaling=0.55,
+        random_state=42,
+        margin=2,
+    ).generate_from_frequencies(frequencies)
+    cloud.recolor(
+        color_func=lambda word, *args, **kwargs: word_cloud_color(categories_by_word.get(word, "Mixte")),
+        random_state=42,
+    )
+
+    image_buffer = BytesIO()
+    cloud.to_image().save(image_buffer, format="PNG")
+    image_base64 = base64.b64encode(image_buffer.getvalue()).decode("ascii")
+
+    visual = {
+        "image_url": f"data:image/png;base64,{image_base64}",
+        "rows": rows[:18],
+        "article_limit": WORD_CLOUD_ARTICLE_LIMIT,
+    }
+    cache.set(cache_key, visual, WORD_CLOUD_CACHE_SECONDS)
+    return visual
 
 def worker_dashboard(request):
     state = WorkerState.get_solo()

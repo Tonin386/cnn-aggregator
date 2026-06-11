@@ -1,0 +1,9 @@
+beautifulsoup4
+django
+nltk
+numpy
+pandas
+plotly
+requests
+textblob
+wordcloud==1.9.6
