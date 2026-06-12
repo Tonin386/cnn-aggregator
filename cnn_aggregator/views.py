@@ -11,7 +11,10 @@ import plotly.offline as pyo
 from io import BytesIO
 import base64
 import hashlib
-from wordcloud import WordCloud
+try:
+    from wordcloud import WordCloud
+except ImportError:
+    WordCloud = None
 from .utils import (
     OBJECTIVE_CUES,
     SENTIMENT_LEXICON,
@@ -20,11 +23,13 @@ from .utils import (
     SUBJECTIVE_CUES,
     WORD_PATTERN,
     article_word_score_annotations,
+    scoring_dependency_status,
     sentiment_contributions,
 )
 from .models import Article, WorkerLog, WorkerState
 from datetime import timedelta
 import os
+import signal
 import subprocess
 import sys
 
@@ -375,8 +380,10 @@ def build_word_cloud_visual(queryset):
         return cached_visual
 
     rows = word_cloud_rows(queryset)
-    if not rows:
+    if not rows or WordCloud is None:
         empty_visual = {"image_url": "", "rows": [], "article_limit": WORD_CLOUD_ARTICLE_LIMIT}
+        if rows:
+            empty_visual["rows"] = rows[:18]
         cache.set(cache_key, empty_visual, WORD_CLOUD_CACHE_SECONDS)
         return empty_visual
 
@@ -423,7 +430,11 @@ def build_word_cloud_visual(queryset):
 
 def worker_dashboard(request):
     state = WorkerState.get_solo()
-    return render(request, "worker_dashboard.html", {"state": state})
+    return render(
+        request,
+        "worker_dashboard.html",
+        {"state": state, "scoring_status": scoring_dependency_status()},
+    )
 
 def worker_status(request):
     state = WorkerState.get_solo()
@@ -469,7 +480,65 @@ def stop_worker(request):
     state.status = WorkerState.STATUS_STOPPING
     state.last_message = "Stop requested from dashboard."
     state.save()
-    return JsonResponse({"status": "stopping", "worker": serialize_worker_state(state)})
+    terminated_count = terminate_worker_processes()
+    if terminated_count:
+        WorkerLog.write(
+            state,
+            f"Sent terminate signal to {terminated_count} worker process(es).",
+            WorkerLog.LEVEL_WARNING,
+        )
+        state.refresh_from_db()
+        state.status = WorkerState.STATUS_IDLE
+        state.stop_requested = False
+        state.heartbeat_at = timezone.now()
+        state.last_message = "Worker process terminated from dashboard."
+        state.save()
+    return JsonResponse({
+        "status": "stopped" if terminated_count else "stopping",
+        "worker": serialize_worker_state(state),
+    })
+
+def worker_process_pids():
+    current_pid = os.getpid()
+    project_cwd = os.path.realpath(os.getcwd())
+    pids = []
+    proc_root = "/proc"
+    if not os.path.isdir(proc_root):
+        return pids
+
+    for name in os.listdir(proc_root):
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid == current_pid:
+            continue
+
+        proc_dir = os.path.join(proc_root, name)
+        try:
+            with open(os.path.join(proc_dir, "cmdline"), "rb") as cmdline_file:
+                cmdline = cmdline_file.read().replace(b"\x00", b" ").decode("utf-8", errors="ignore")
+            process_cwd = os.path.realpath(os.readlink(os.path.join(proc_dir, "cwd")))
+        except OSError:
+            continue
+
+        if process_cwd != project_cwd:
+            continue
+        if "manage.py" in cmdline and "run_cnn_worker" in cmdline:
+            pids.append(pid)
+
+    return pids
+
+def terminate_worker_processes():
+    terminated_count = 0
+    for pid in worker_process_pids():
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            continue
+        terminated_count += 1
+    return terminated_count
 
 def launch_worker_process(state, command_args, launch_message):
     state.status = WorkerState.STATUS_RUNNING
@@ -503,6 +572,7 @@ def serialize_worker_state(state):
         "total_created": state.total_created,
         "total_updated": state.total_updated,
         "stop_requested": state.stop_requested,
+        "scoring_status": scoring_dependency_status(),
         "logs": [
             {
                 "created_at": log.created_at.isoformat(),
@@ -520,9 +590,15 @@ class ArticleDetailView(DetailView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["annotated_words"] = article_word_score_annotations(self.object.content)
+        context["annotated_words"] = article_word_score_annotations(
+            self.object.content,
+            topic=self.object.topic,
+            publisher=self.object.publisher,
+        )
         context["sentiment_contributions"] = sentiment_contributions(
-            f"{self.object.title}. {self.object.content}"
+            f"{self.object.title}. {self.object.content}",
+            topic=self.object.topic,
+            publisher=self.object.publisher,
         )
         context["subjectivity_objective_threshold"] = SUBJECTIVITY_OBJECTIVE_THRESHOLD
         context["subjectivity_subjective_threshold"] = SUBJECTIVITY_SUBJECTIVE_THRESHOLD

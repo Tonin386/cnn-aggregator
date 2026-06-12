@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 
 from cnn_aggregator.models import Article
-from cnn_aggregator.utils import analyze_sentiment, fix_text_encoding
+from cnn_aggregator.utils import analyze_article_sentiment, fix_text_encoding
 
 
 class Command(BaseCommand):
@@ -34,10 +34,28 @@ class Command(BaseCommand):
             update_fields = ["title", "content"]
 
             if options["rescore"]:
-                article.polarity, article.subjectivity = analyze_sentiment(
-                    f"{article.title}. {article.content}"
+                scores = analyze_article_sentiment(
+                    article.title,
+                    article.content,
+                    topic=article.topic,
+                    publisher=article.publisher,
                 )
-                update_fields.extend(["polarity", "subjectivity"])
+                article.polarity = scores.polarity
+                article.subjectivity = scores.subjectivity
+                article.event_polarity = scores.event_polarity
+                article.writing_polarity = scores.writing_polarity
+                article.editorial_subjectivity = scores.editorial_subjectivity
+                article.scoring_version = scores.scoring_version
+                article.scoring_metadata = scores.metadata
+                update_fields.extend([
+                    "polarity",
+                    "subjectivity",
+                    "event_polarity",
+                    "writing_polarity",
+                    "editorial_subjectivity",
+                    "scoring_version",
+                    "scoring_metadata",
+                ])
 
             article.save(update_fields=update_fields)
 

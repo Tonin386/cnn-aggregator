@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from cnn_aggregator.models import Article, WorkerLog, WorkerState
 from cnn_aggregator.utils import (
+    FetchStopRequested,
     clear_source_discovery_caches,
     retrieve_all_articles_for_date,
     update_article_scores,
@@ -60,7 +61,11 @@ class Command(BaseCommand):
                 return
 
         last_freshness_check = timezone.now()
-        self._check_fresh_articles(state, options)
+        try:
+            self._check_fresh_articles(state, options)
+        except FetchStopRequested:
+            self._mark_idle(state, "Stop requested. Worker is idle.")
+            return
 
         while True:
             state.refresh_from_db()
@@ -92,6 +97,7 @@ class Command(BaseCommand):
                         message,
                         level,
                     ),
+                    stop_checker=lambda: self._stop_requested(state),
                 )
 
                 state.refresh_from_db()
@@ -111,6 +117,9 @@ class Command(BaseCommand):
 
                 level = WorkerLog.LEVEL_WARNING if stats["errors"] else WorkerLog.LEVEL_SUCCESS
                 self._log(state, state.last_message, level)
+            except FetchStopRequested:
+                self._mark_idle(state, "Stop requested. Worker is idle.")
+                return
             except Exception as exc:
                 state.refresh_from_db()
                 state.status = WorkerState.STATUS_ERROR
@@ -141,6 +150,10 @@ class Command(BaseCommand):
         state.stop_requested = False
         state.save()
         self._log(state, message, WorkerLog.LEVEL_SUCCESS)
+
+    def _stop_requested(self, state):
+        state.refresh_from_db(fields=["stop_requested"])
+        return state.stop_requested
 
     def _log(self, state, message, level=WorkerLog.LEVEL_INFO):
         WorkerLog.write(state, message, level)
@@ -241,6 +254,7 @@ class Command(BaseCommand):
                     message,
                     level,
                 ),
+                stop_checker=lambda: self._stop_requested(state),
             )
 
             state.refresh_from_db()

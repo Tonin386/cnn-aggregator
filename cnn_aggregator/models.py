@@ -8,6 +8,11 @@ class Article(models.Model):
     content = models.TextField("Content")
     polarity = models.FloatField("Polarity score")
     subjectivity = models.FloatField("Subjectivity score")
+    event_polarity = models.FloatField("Event polarity score", default=0.0)
+    writing_polarity = models.FloatField("Writing polarity score", default=0.0)
+    editorial_subjectivity = models.FloatField("Editorial subjectivity score", default=0.0)
+    scoring_version = models.CharField("Scoring version", max_length=32, blank=True, default="")
+    scoring_metadata = models.JSONField("Scoring metadata", default=dict, blank=True)
     slug = models.SlugField("Slug", unique=True, max_length=200, blank=True)
     fetch_date = models.DateField("Fetch date", auto_now_add=True)
     fetched_at = models.DateTimeField("Fetched at", auto_now_add=True)
@@ -36,6 +41,10 @@ class Article(models.Model):
             models.Index(fields=["publisher", "published_date"]),
             models.Index(fields=["polarity"]),
             models.Index(fields=["subjectivity"]),
+            models.Index(fields=["event_polarity"]),
+            models.Index(fields=["writing_polarity"]),
+            models.Index(fields=["editorial_subjectivity"]),
+            models.Index(fields=["scoring_version"]),
         ]
 
 

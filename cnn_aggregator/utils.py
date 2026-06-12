@@ -13,6 +13,7 @@ import os
 import json
 import html
 import unicodedata
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from email.utils import parsedate_to_datetime
 from functools import lru_cache
@@ -21,6 +22,30 @@ from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
 from .models import Article
+from .scoring_config import (
+    DEFAULT_POLARITY_WEIGHTS,
+    EVIDENCE_SIGNAL_WEIGHT,
+    FATAL_INCIDENT_POLARITY_WEIGHTS,
+    LEXICON_SCORE_BOOST,
+    OBJECTIVE_PHRASE_SIGNAL_WEIGHT,
+    OBJECTIVE_SUBJECTIVITY_WEIGHT,
+    POLARITY_SIGNAL_WEIGHT,
+    QUOTE_SENTIMENT_WEIGHT,
+    QUOTE_SUBJECTIVITY_WEIGHT,
+    QUOTE_WRITING_TONE_WEIGHT,
+    REPEATED_TERM_TOTAL_WEIGHT_CAP,
+    SCORING_VERSION,
+    SENTIMENT_HIT_SIGNAL_WEIGHT,
+    SUBJECTIVE_PHRASE_SIGNAL_WEIGHT,
+    SUBJECTIVE_SUBJECTIVITY_WEIGHT,
+    SUBJECTIVITY_OBJECTIVE_THRESHOLD,
+    SUBJECTIVITY_SIGNAL_CAP,
+    SUBJECTIVITY_SUBJECTIVE_THRESHOLD,
+    SUBJECTIVITY_TOPIC_PRIORS,
+    SUBJECTIVITY_WEIGHTS,
+    TOPIC_POLARITY_MULTIPLIERS,
+    TOPIC_SENTIMENT_MULTIPLIERS,
+)
 
 try:
     from textblob import TextBlob
@@ -33,6 +58,30 @@ try:
 except ImportError:
     LangDetectException = Exception
     detect_langs = None
+
+
+class FetchStopRequested(Exception):
+    """Raised when a long-running retrieval should stop cooperatively."""
+
+
+@dataclass
+class SentimentScores:
+    polarity: float
+    subjectivity: float
+    event_polarity: float = 0.0
+    writing_polarity: float = 0.0
+    editorial_subjectivity: float = 0.0
+    scoring_version: str = SCORING_VERSION
+    metadata: dict = field(default_factory=dict)
+
+    def __iter__(self):
+        yield self.polarity
+        yield self.subjectivity
+
+
+def raise_if_stop_requested(stop_checker=None):
+    if stop_checker and stop_checker():
+        raise FetchStopRequested("Stop requested while fetching articles.")
 
 def nltk_resource_available(path):
     try:
@@ -69,22 +118,24 @@ def load_json_lexicon(filename, fallback):
 def build_sentiment_lexicon(categories):
     lexicon = {}
     for category in categories.values():
-        score = np.clip(float(category["score"]) * 1.18, -1, 1)
+        score = np.clip(float(category["score"]) * LEXICON_SCORE_BOOST, -1, 1)
         for word in category["words"]:
             lexicon[word.lower()] = score
     return lexicon
 
 def build_phrase_lexicon(entries):
     return {
-        entry["pattern"]: np.clip(float(entry["score"]) * 1.18, -1, 1)
+        entry["pattern"]: np.clip(float(entry["score"]) * LEXICON_SCORE_BOOST, -1, 1)
         for entry in entries
     }
 
 SENTIMENT_WORD_CATEGORIES = load_json_lexicon("sentiment_words.json", {})
 SENTIMENT_LEXICON = build_sentiment_lexicon(SENTIMENT_WORD_CATEGORIES)
-NEWS_PHRASE_LEXICON = build_phrase_lexicon(load_json_lexicon("news_phrases.json", []))
+NEWS_PHRASE_ENTRIES = load_json_lexicon("news_phrases.json", [])
+NEWS_PHRASE_LEXICON = build_phrase_lexicon(NEWS_PHRASE_ENTRIES)
 MODIFIERS = load_json_lexicon("modifiers.json", {})
 SUBJECTIVITY_CUES = load_json_lexicon("subjectivity_cues.json", {})
+TOPIC_MAP = load_json_lexicon("topic_map.json", {})
 
 NEGATIONS = set(MODIFIERS.get("negations", []))
 INTENSIFIERS = {word: float(value) for word, value in MODIFIERS.get("intensifiers", {}).items()}
@@ -93,17 +144,69 @@ OBJECTIVE_CUES = set(SUBJECTIVITY_CUES.get("objective_cues", []))
 SUBJECTIVE_CUES = set(SUBJECTIVITY_CUES.get("subjective_cues", []))
 OBJECTIVE_PHRASES = SUBJECTIVITY_CUES.get("objective_phrases", [])
 SUBJECTIVE_PHRASES = SUBJECTIVITY_CUES.get("subjective_phrases", [])
-SUBJECTIVITY_OBJECTIVE_THRESHOLD = 0.30
-SUBJECTIVITY_SUBJECTIVE_THRESHOLD = 0.50
-OBJECTIVE_PHRASE_SIGNAL_WEIGHT = 1.35
-SUBJECTIVE_PHRASE_SIGNAL_WEIGHT = 1.45
-EVIDENCE_SIGNAL_WEIGHT = 0.45
-SENTIMENT_HIT_SIGNAL_WEIGHT = 0.40
-POLARITY_SIGNAL_WEIGHT = 0.70
-OBJECTIVE_SUBJECTIVITY_WEIGHT = 0.24
-SUBJECTIVE_SUBJECTIVITY_WEIGHT = 0.36
+CANONICAL_TOPICS = set(TOPIC_MAP.get("canonical_topics", []))
+TOPIC_ALIASES = TOPIC_MAP.get("aliases", {})
+TOPIC_KEYWORD_RULES = TOPIC_MAP.get("keyword_rules", {})
+TOPIC_KEYWORD_PRIORITY = [
+    "crime-justice",
+    "politics",
+    "business",
+    "technology",
+    "science",
+    "health",
+    "climate",
+    "sports",
+    "culture",
+    "entertainment",
+    "opinion",
+    "lifestyle",
+    "travel",
+    "education",
+    "us",
+    "world",
+]
+SUBJECTIVE_TOPIC_TERMS = {
+    "opinion": {
+        "argue", "argues", "column", "commentary", "editorial", "opinion",
+        "should", "must", "wrong", "right", "delusion", "reality",
+    },
+    "entertainment": {
+        "brilliant", "review", "wonderful", "horrible", "buzzy", "hit",
+    },
+}
+NEUTRAL_CONTEXT_PHRASES = {
+    "sports": {
+        "group of death": {"death"},
+        "sudden death": {"death"},
+        "death group": {"death"},
+    },
+}
+FATAL_INCIDENT_CONTEXT_PATTERNS = [
+    re.compile(pattern)
+    for pattern in (
+        r"\bbody of missing\b",
+        r"\bfinds? body\b",
+        r"\bfound body\b",
+        r"\brecovered (?:the |a )?body\b",
+        r"\bpositively identified as\b",
+        r"\bswept (?:out to sea|into the ocean)\b",
+        r"\b(?:child|girl|boy|toddler|teen|teenager|student|person|man|woman) (?:died|dead|killed|missing)\b",
+    )
+]
+FATAL_RESPONSE_POSITIVE_MULTIPLIERS = {
+    "community": 0.25,
+    "recovered": 0.0,
+    "rescue": 0.35,
+    "rescued": 0.35,
+    "safety": 0.25,
+    "service": 0.25,
+}
+AMBIGUOUS_POSITIVE_TOKENS = {
+    "record": {"business", "sports"},
+}
 QUOTE_OR_NUMBER_PATTERN = re.compile(r'["“”]|\b\d+(?:\.\d+)?%?\b')
 WORD_PATTERN = re.compile(r"[a-z]+(?:'[a-z]+)?|\d+(?:\.\d+)?%?")
+QUOTE_CHARACTERS = {'"', "“", "”"}
 ENGLISH_STOPWORD_FALLBACK = {
     "the", "and", "that", "have", "for", "not", "with", "you", "this", "but",
     "his", "from", "they", "say", "her", "she", "will", "one", "all", "would",
@@ -136,6 +239,42 @@ ARTICLE_DATE_PATTERN = re.compile(r"/(?P<year>20\d{2})/(?P<month>\d{2})/(?P<day>
 LOOSE_ARTICLE_DATE_PATTERN = re.compile(r"/(?P<year>20\d{2})/(?P<month>\d{1,2})/(?P<day>\d{1,2})(?:/|$)")
 NPR_STANDARD_SITEMAP_PATTERN = re.compile(r"sitemap_standard_01-(?P<half>Jan|Jul)-(?P<year>\d{2})\.xml$")
 LINK_DATE_REGEX = r"20[0-9][0-9](\/[0-9][0-9]){2}\/"
+
+def scoring_dependency_status():
+    return {
+        "textblob": TextBlob is not None,
+        "vader": VADER_ANALYZER is not None,
+        "nltk_punkt": PUNKT_AVAILABLE,
+        "nltk_stopwords": STOPWORDS_AVAILABLE,
+        "scoring_version": SCORING_VERSION,
+    }
+
+def quote_spans(text):
+    spans = []
+    start = None
+    for index, character in enumerate(text):
+        if character not in QUOTE_CHARACTERS:
+            continue
+        if start is None:
+            start = index
+        else:
+            spans.append((start, index + 1))
+            start = None
+    return spans
+
+def character_in_spans(position, spans):
+    return any(start <= position < end for start, end in spans)
+
+def token_rows(text):
+    spans = quote_spans(text)
+    return [
+        {
+            "token": match.group(0),
+            "start": match.start(),
+            "quoted": character_in_spans(match.start(), spans),
+        }
+        for match in WORD_PATTERN.finditer(text.lower())
+    ]
 
 def article_highlight_word_groups():
     groups = {
@@ -236,7 +375,13 @@ def mojibake_score(text):
 
 def repeated_term_weight(term_counts, term):
     term_counts[term] = term_counts.get(term, 0) + 1
-    return 1 / term_counts[term]
+    next_weight = 1 / term_counts[term]
+    total_weight_key = f"__total_weight__:{term}"
+    previous_total_weight = term_counts.get(total_weight_key, 0.0)
+    allowed_weight = max(REPEATED_TERM_TOTAL_WEIGHT_CAP - previous_total_weight, 0.0)
+    weight = min(next_weight, allowed_weight)
+    term_counts[total_weight_key] = previous_total_weight + weight
+    return weight
 
 def clean_phrase_pattern(pattern):
     return pattern.replace("\\b", "").replace("\\", "").strip()
@@ -291,6 +436,16 @@ def weighted_token_count(tokens, cue_words, prefix):
             total += repeated_term_weight(term_counts, f"{prefix}:{token}")
     return total
 
+def weighted_token_count_from_rows(rows, cue_words, prefix, quoted_weight=1.0):
+    term_counts = {}
+    total = 0.0
+    for row in rows:
+        token = row["token"]
+        if token in cue_words:
+            weight = repeated_term_weight(term_counts, f"{prefix}:{token}")
+            total += weight * (quoted_weight if row.get("quoted") else 1.0)
+    return total
+
 def weighted_phrase_count(normalized_text_lower, phrase_patterns, prefix):
     term_counts = {}
     total = 0.0
@@ -299,6 +454,44 @@ def weighted_phrase_count(normalized_text_lower, phrase_patterns, prefix):
         for _ in range(occurrences):
             total += repeated_term_weight(term_counts, f"{prefix}:{pattern}")
     return total
+
+def article_context(topic="", publisher=""):
+    return {
+        "topic": normalize_topic(topic or "general", publisher=publisher),
+        "publisher": publisher or "",
+    }
+
+def token_window(tokens, index, radius=3):
+    return tokens[max(0, index - radius): index + radius + 1]
+
+def neutral_context_tokens(topic, normalized_text_lower):
+    neutral_tokens = set()
+    for phrase, tokens in NEUTRAL_CONTEXT_PHRASES.get(topic, {}).items():
+        if phrase in normalized_text_lower:
+            neutral_tokens.update(tokens)
+    return neutral_tokens
+
+def has_fatal_incident_context(normalized_text_lower):
+    return any(pattern.search(normalized_text_lower) for pattern in FATAL_INCIDENT_CONTEXT_PATTERNS)
+
+def contextual_sentiment_score(token, score, topic, normalized_text_lower):
+    if token in neutral_context_tokens(topic, normalized_text_lower):
+        return 0.0
+    allowed_topics = AMBIGUOUS_POSITIVE_TOKENS.get(token)
+    if allowed_topics is not None and topic not in allowed_topics:
+        return 0.0
+    if has_fatal_incident_context(normalized_text_lower):
+        score *= FATAL_RESPONSE_POSITIVE_MULTIPLIERS.get(token, 1.0)
+    return score * TOPIC_SENTIMENT_MULTIPLIERS.get(topic, {}).get(token, 1.0)
+
+def topic_subjectivity_prior(topic):
+    return SUBJECTIVITY_TOPIC_PRIORS.get(topic, 0.0)
+
+def topic_subjective_token_weight(tokens, topic):
+    cue_words = SUBJECTIVE_TOPIC_TERMS.get(topic, set())
+    if not cue_words:
+        return 0.0
+    return weighted_token_count(tokens, cue_words, f"topic-subjective:{topic}")
 
 def subjectivity_lexicon_balance():
     objective_mass = OBJECTIVE_SUBJECTIVITY_WEIGHT * (
@@ -350,10 +543,12 @@ def is_english_text(text, min_probability=0.78):
     stopword_hits = sum(1 for token in alphabetic_tokens if token in ENGLISH_STOPWORD_FALLBACK)
     return (stopword_hits / max(len(alphabetic_tokens), 1)) >= 0.04
 
-def sentiment_contributions(text, limit=30):
+def sentiment_contributions(text, limit=30, topic="general", publisher=""):
     if not text or not text.strip():
         return []
 
+    context = article_context(topic=topic, publisher=publisher)
+    normalized_topic = context["topic"]
     normalized_text = re.sub(r"\s+", " ", text).strip()
     normalized_text_lower = normalized_text.lower()
     tokens = WORD_PATTERN.findall(normalized_text_lower)
@@ -399,7 +594,14 @@ def sentiment_contributions(text, limit=30):
         if token not in SENTIMENT_LEXICON:
             continue
 
-        score = SENTIMENT_LEXICON[token]
+        score = contextual_sentiment_score(
+            token,
+            SENTIMENT_LEXICON[token],
+            normalized_topic,
+            normalized_text_lower,
+        )
+        if score == 0:
+            continue
 
         if any(previous in NEGATIONS for previous in previous_tokens):
             score *= -0.7
@@ -446,10 +648,12 @@ def sentiment_contributions(text, limit=30):
 
     return sorted(rows, key=lambda row: row["impact"], reverse=True)[:limit]
 
-def article_word_score_annotations(text):
+def article_word_score_annotations(text, topic="general", publisher=""):
     if not text:
         return []
 
+    context = article_context(topic=topic, publisher=publisher)
+    normalized_topic = context["topic"]
     normalized_text = re.sub(r"\s+", " ", text).strip()
     tokens = WORD_PATTERN.findall(normalized_text.lower())
     token_count = max(len(tokens), 1)
@@ -487,7 +691,25 @@ def article_word_score_annotations(text):
             )
 
         if token in SENTIMENT_LEXICON:
-            score = SENTIMENT_LEXICON[token]
+            score = contextual_sentiment_score(
+                token,
+                SENTIMENT_LEXICON[token],
+                normalized_topic,
+                normalized_text.lower(),
+            )
+            if score == 0:
+                annotations.append({
+                    "text": segment,
+                    "space": False,
+                    "token": token,
+                    "polarity": polarity_contribution,
+                    "subjectivity": subjectivity_contribution,
+                    "modifiers": modifiers,
+                    "has_score": abs(polarity_contribution) > 0 or abs(subjectivity_contribution) > 0,
+                })
+                if token:
+                    previous_tokens.append(token)
+                continue
             context_tokens = previous_tokens[-3:]
             if any(previous in NEGATIONS for previous in context_tokens):
                 score *= -0.7
@@ -547,15 +769,25 @@ def read_generic_article(article_html):
     content = " ".join(paragraph.get_text(" ", strip=True) for paragraph in paragraphs)
     return fix_text_encoding(title), fix_text_encoding(content)
 
-def save_article(title, topic, content, src, pol_score, sbj_score, published_date=None, publisher="CNN"):
+def save_article(title, topic, content, src, scores, sbj_score=None, published_date=None, publisher="CNN"):
+    if isinstance(scores, SentimentScores):
+        score_values = scores
+    else:
+        score_values = SentimentScores(float(scores), float(sbj_score or 0.0))
+
     return Article.objects.create(
         title=fix_text_encoding(title),
         publisher=publisher,
         topic=topic,
         content=fix_text_encoding(content),
         source=src,
-        polarity=pol_score,
-        subjectivity=sbj_score,
+        polarity=score_values.polarity,
+        subjectivity=score_values.subjectivity,
+        event_polarity=score_values.event_polarity,
+        writing_polarity=score_values.writing_polarity,
+        editorial_subjectivity=score_values.editorial_subjectivity,
+        scoring_version=score_values.scoring_version,
+        scoring_metadata=score_values.metadata,
         published_date=published_date,
     )
 
@@ -579,11 +811,31 @@ def analyze_subjectivity(
     blob_subjectivity,
     sentiment_hits,
     custom_polarity,
+    topic="general",
+    rows=None,
+    quoted_sentiment_hits=0.0,
 ):
     token_count = max(len(tokens), 1)
     length_scale = np.sqrt(token_count / 25)
-    objective_word_weight = weighted_token_count(tokens, OBJECTIVE_CUES, "objective")
-    subjective_word_weight = weighted_token_count(tokens, SUBJECTIVE_CUES, "subjective")
+    rows = rows or [{"token": token, "quoted": False} for token in tokens]
+    objective_word_weight = weighted_token_count_from_rows(
+        rows,
+        OBJECTIVE_CUES,
+        "objective",
+        quoted_weight=QUOTE_SUBJECTIVITY_WEIGHT,
+    )
+    subjective_word_weight = weighted_token_count_from_rows(
+        rows,
+        SUBJECTIVE_CUES,
+        "subjective",
+        quoted_weight=QUOTE_SUBJECTIVITY_WEIGHT,
+    )
+    topic_subjective_weight = weighted_token_count_from_rows(
+        rows,
+        SUBJECTIVE_TOPIC_TERMS.get(topic, set()),
+        f"topic-subjective:{topic}",
+        quoted_weight=QUOTE_SUBJECTIVITY_WEIGHT,
+    )
     objective_phrase_weight = weighted_phrase_count(
         normalized_text_lower,
         OBJECTIVE_PHRASES,
@@ -595,6 +847,9 @@ def analyze_subjectivity(
         "subjective-phrase",
     )
     evidence_weight = min(len(QUOTE_OR_NUMBER_PATTERN.findall(normalized_text)), 18)
+    effective_sentiment_hits = max(sentiment_hits - quoted_sentiment_hits, 0.0) + (
+        quoted_sentiment_hits * QUOTE_SUBJECTIVITY_WEIGHT
+    )
 
     objective_signal = (
         objective_word_weight
@@ -603,14 +858,18 @@ def analyze_subjectivity(
     ) / length_scale
     subjective_signal = (
         subjective_word_weight
+        + 1.15 * topic_subjective_weight
         + SUBJECTIVE_PHRASE_SIGNAL_WEIGHT * subjective_phrase_weight
-        + SENTIMENT_HIT_SIGNAL_WEIGHT * sentiment_hits
+        + SENTIMENT_HIT_SIGNAL_WEIGHT * effective_sentiment_hits
         + POLARITY_SIGNAL_WEIGHT * abs(custom_polarity)
     ) / length_scale
 
-    objective_signal = min(objective_signal, 1.6)
-    subjective_signal = min(subjective_signal, 1.6)
-    balanced_objective_signal = min(objective_signal * SUBJECTIVITY_OBJECTIVE_BALANCE, 1.6)
+    objective_signal = min(objective_signal, SUBJECTIVITY_SIGNAL_CAP)
+    subjective_signal = min(subjective_signal, SUBJECTIVITY_SIGNAL_CAP)
+    balanced_objective_signal = min(
+        objective_signal * SUBJECTIVITY_OBJECTIVE_BALANCE,
+        SUBJECTIVITY_SIGNAL_CAP,
+    )
     cue_subjectivity = np.clip(
         0.24
         + SUBJECTIVE_SUBJECTIVITY_WEIGHT * subjective_signal
@@ -618,8 +877,11 @@ def analyze_subjectivity(
         0,
         1,
     )
-    sentiment_density = min(sentiment_hits / token_count, 0.16)
+    sentiment_density = min(effective_sentiment_hits / token_count, 0.16)
     subjectivity_floor = 0.04 + sentiment_density
+    topic_prior = topic_subjectivity_prior(topic)
+    if topic_prior:
+        subjectivity_floor = max(subjectivity_floor, topic_prior)
     subjectivity_ceiling = 1.0
 
     if objective_signal > 0.65 and subjective_signal < 0.35:
@@ -628,18 +890,26 @@ def analyze_subjectivity(
         subjectivity_ceiling = 0.48
 
     return np.clip(
-        max(0.42 * blob_subjectivity + 0.58 * cue_subjectivity, subjectivity_floor),
+        max(
+            SUBJECTIVITY_WEIGHTS["blob"] * blob_subjectivity
+            + SUBJECTIVITY_WEIGHTS["cue"] * cue_subjectivity
+            + topic_prior,
+            subjectivity_floor,
+        ),
         0,
         subjectivity_ceiling,
     )
 
-def analyze_sentiment(text):
+def analyze_sentiment(text, topic="general", publisher=""):
     if not text or not text.strip():
-        return 0.0, 0.0
+        return SentimentScores(0.0, 0.0, scoring_version=SCORING_VERSION)
 
+    context = article_context(topic=topic, publisher=publisher)
+    normalized_topic = context["topic"]
     normalized_text = re.sub(r"\s+", " ", text).strip()
     normalized_text_lower = normalized_text.lower()
-    tokens = WORD_PATTERN.findall(normalized_text.lower())
+    rows = token_rows(normalized_text)
+    tokens = [row["token"] for row in rows]
     blob_polarity = 0.0
     blob_subjectivity = 0.0
     vader_polarity = 0.0
@@ -652,22 +922,33 @@ def analyze_sentiment(text):
     if VADER_ANALYZER is not None:
         vader_polarity = VADER_ANALYZER.polarity_scores(normalized_text)["compound"]
 
-    custom_score = 0.0
-    sentiment_hits = 0
+    custom_event_score = 0.0
+    custom_writing_score = 0.0
+    sentiment_hits = 0.0
+    quoted_sentiment_hits = 0.0
     term_counts = {}
 
     for pattern, score in NEWS_PHRASE_LEXICON.items():
         occurrences = len(re.findall(pattern, normalized_text_lower))
         for _ in range(occurrences):
             weight = repeated_term_weight(term_counts, f"phrase:{pattern}")
-            custom_score += score * weight
+            custom_event_score += score * weight
+            custom_writing_score += score * weight
             sentiment_hits += weight
 
-    for index, token in enumerate(tokens):
+    for index, row in enumerate(rows):
+        token = row["token"]
         if token not in SENTIMENT_LEXICON:
             continue
 
-        score = SENTIMENT_LEXICON[token]
+        score = contextual_sentiment_score(
+            token,
+            SENTIMENT_LEXICON[token],
+            normalized_topic,
+            normalized_text_lower,
+        )
+        if score == 0:
+            continue
         previous_tokens = tokens[max(0, index - 3):index]
 
         if any(previous in NEGATIONS for previous in previous_tokens):
@@ -678,43 +959,128 @@ def analyze_sentiment(text):
             score *= DIMINISHERS.get(previous, 1.0)
 
         weight = repeated_term_weight(term_counts, f"word:{token}")
-        custom_score += score * weight
+        quote_weight = QUOTE_SENTIMENT_WEIGHT if row.get("quoted") else 1.0
+        custom_event_score += score * weight
+        custom_writing_score += score * weight * quote_weight
         sentiment_hits += weight
+        if row.get("quoted"):
+            quoted_sentiment_hits += weight
 
     if sentiment_hits:
-        custom_polarity = np.tanh(custom_score / np.sqrt(max(sentiment_hits, 1)))
+        custom_polarity = np.tanh(custom_event_score / np.sqrt(max(sentiment_hits, 1)))
+        writing_custom_polarity = np.tanh(custom_writing_score / np.sqrt(max(sentiment_hits, 1)))
     else:
         custom_polarity = 0.0
+        writing_custom_polarity = 0.0
 
-    sentiment_polarity = np.clip(
-        (
-            0.30 * blob_polarity
-            + 0.30 * vader_polarity
-            + 0.40 * custom_polarity
-        ),
+    if has_fatal_incident_context(normalized_text_lower) and custom_polarity < 0:
+        polarity_weights = FATAL_INCIDENT_POLARITY_WEIGHTS
+    else:
+        polarity_weights = DEFAULT_POLARITY_WEIGHTS
+
+    polarity_components = (
+        polarity_weights["blob"] * blob_polarity
+        + polarity_weights["vader"] * vader_polarity
+        + polarity_weights["custom"] * custom_polarity
+    )
+
+    sentiment_polarity = np.clip(polarity_components, -1, 1)
+    sentiment_polarity *= TOPIC_POLARITY_MULTIPLIERS.get(normalized_topic, 1.0)
+    event_polarity = np.clip(custom_polarity, -1, 1)
+    event_polarity *= TOPIC_POLARITY_MULTIPLIERS.get(normalized_topic, 1.0)
+    writing_polarity = np.clip(
+        polarity_weights["blob"] * blob_polarity
+        + polarity_weights["vader"] * vader_polarity
+        + polarity_weights["custom"] * writing_custom_polarity * QUOTE_WRITING_TONE_WEIGHT
+        + polarity_weights["custom"] * writing_custom_polarity * (1 - QUOTE_WRITING_TONE_WEIGHT),
         -1,
-        1
+        1,
+    )
+    writing_polarity *= TOPIC_POLARITY_MULTIPLIERS.get(normalized_topic, 1.0)
+    quoted_sentiment_ratio = quoted_sentiment_hits / max(sentiment_hits, 1.0)
+    effective_blob_subjectivity = blob_subjectivity * (
+        1.0 - ((1.0 - QUOTE_SUBJECTIVITY_WEIGHT) * quoted_sentiment_ratio)
     )
 
     sentiment_subjectivity = analyze_subjectivity(
         normalized_text,
         normalized_text_lower,
         tokens,
-        blob_subjectivity,
+        effective_blob_subjectivity,
         sentiment_hits,
         custom_polarity,
+        topic=normalized_topic,
+        rows=rows,
+        quoted_sentiment_hits=quoted_sentiment_hits,
     )
 
-    return float(sentiment_polarity), float(sentiment_subjectivity)
+    metadata = {
+        "dependencies": scoring_dependency_status(),
+        "topic": normalized_topic,
+        "publisher": publisher or "",
+        "components": {
+            "blob_polarity": float(blob_polarity),
+            "blob_subjectivity": float(blob_subjectivity),
+            "effective_blob_subjectivity": float(effective_blob_subjectivity),
+            "vader_polarity": float(vader_polarity),
+            "custom_event_polarity": float(custom_polarity),
+            "custom_writing_polarity": float(writing_custom_polarity),
+            "sentiment_hits": float(sentiment_hits),
+            "quoted_sentiment_hits": float(quoted_sentiment_hits),
+        },
+    }
+
+    return SentimentScores(
+        polarity=float(sentiment_polarity),
+        subjectivity=float(sentiment_subjectivity),
+        event_polarity=float(event_polarity),
+        writing_polarity=float(writing_polarity),
+        editorial_subjectivity=float(sentiment_subjectivity),
+        scoring_version=SCORING_VERSION,
+        metadata=metadata,
+    )
+
+def analyze_article_sentiment(title, content, topic="general", publisher=""):
+    return analyze_sentiment(
+        f"{title}. {content}",
+        topic=topic,
+        publisher=publisher,
+    )
+
+def article_scores_current(article):
+    return (
+        article.scoring_version == SCORING_VERSION
+        and article.polarity != 0
+        and article.subjectivity != 0
+        and article.scoring_metadata
+    )
 
 def update_article_scores(article, force=False):
-    if not force and article.polarity != 0 and article.subjectivity != 0:
+    if not force and article_scores_current(article):
         return
 
-    article.polarity, article.subjectivity = analyze_sentiment(
-        f"{article.title}. {article.content}"
+    scores = analyze_article_sentiment(
+        article.title,
+        article.content,
+        topic=article.topic,
+        publisher=article.publisher,
     )
-    article.save(update_fields=["polarity", "subjectivity"])
+    article.polarity = scores.polarity
+    article.subjectivity = scores.subjectivity
+    article.event_polarity = scores.event_polarity
+    article.writing_polarity = scores.writing_polarity
+    article.editorial_subjectivity = scores.editorial_subjectivity
+    article.scoring_version = scores.scoring_version
+    article.scoring_metadata = scores.metadata
+    article.save(update_fields=[
+        "polarity",
+        "subjectivity",
+        "event_polarity",
+        "writing_polarity",
+        "editorial_subjectivity",
+        "scoring_version",
+        "scoring_metadata",
+    ])
 
 def normalize_cnn_url(link, base_url=CNN_BASE_URL):
     if not link:
@@ -745,6 +1111,41 @@ def topic_from_url(url):
     topic = path.split("/")[0].strip()
     return topic or "general"
 
+def normalize_topic_slug(value):
+    value = (value or "").strip().lower()
+    value = re.sub(r"[_/]+", "-", value)
+    value = re.sub(r"[^a-z0-9-]+", "-", value)
+    value = re.sub(r"-+", "-", value).strip("-")
+    return value or "general"
+
+def normalize_topic(raw_topic="", publisher="", url="", title=""):
+    topic_slug = normalize_topic_slug(raw_topic)
+    if topic_slug in CANONICAL_TOPICS:
+        return topic_slug
+
+    alias_topic = TOPIC_ALIASES.get(topic_slug)
+    if alias_topic and alias_topic != "general":
+        return alias_topic
+
+    evidence = " ".join(
+        part
+        for part in [
+            topic_slug.replace("-", " "),
+            publisher,
+            urlparse(url).path.replace("/", " "),
+            title,
+        ]
+        if part
+    ).lower()
+    if "world cup" in evidence:
+        return "sports"
+    for canonical_topic in TOPIC_KEYWORD_PRIORITY:
+        keywords = TOPIC_KEYWORD_RULES.get(canonical_topic, [])
+        if any(keyword in evidence for keyword in keywords):
+            return canonical_topic
+
+    return alias_topic or "general"
+
 def domain_from_url(url):
     hostname = urlparse(url).hostname or ""
     hostname = hostname.removeprefix("www.")
@@ -773,17 +1174,17 @@ def source_topic_from_url(url, publisher=""):
         return domain_from_url(url)
 
     if publisher == "Al Jazeera":
-        return path_parts[0]
+        return normalize_topic(path_parts[0], publisher=publisher, url=url)
     if publisher == "BBC":
         if path_parts[0] == "news":
-            return "news"
-        return path_parts[0]
+            return "general"
+        return normalize_topic(path_parts[0], publisher=publisher, url=url)
     if publisher == "NPR":
-        return "news"
+        return "general"
     if publisher == "The Guardian":
-        return path_parts[0]
+        return normalize_topic(path_parts[0], publisher=publisher, url=url)
 
-    return topic_from_url(url)
+    return normalize_topic(topic_from_url(url), publisher=publisher, url=url)
 
 def fetch_and_store_article(url, topic=None, published_date=None, publisher="CNN", fallback_title="", fallback_content=""):
     full_link = normalize_cnn_url(url)
@@ -791,7 +1192,11 @@ def fetch_and_store_article(url, topic=None, published_date=None, publisher="CNN
         return {"seen": 0, "created": 0, "updated": 0, "skipped": 1, "url": url}
 
     published_date = published_date or article_date_from_url(full_link)
-    topic = topic or source_topic_from_url(full_link, publisher)
+    topic = normalize_topic(
+        topic or source_topic_from_url(full_link, publisher),
+        publisher=publisher,
+        url=full_link,
+    )
     articles_match = Article.objects.filter(source=full_link)
 
     if articles_match.exists():
@@ -835,14 +1240,18 @@ def fetch_and_store_article(url, topic=None, published_date=None, publisher="CNN
             "reason": "non-english",
         }
 
-    polarity_score, subjectivity_score = analyze_sentiment(f"{title}. {content}")
+    scores = analyze_article_sentiment(
+        title,
+        content,
+        topic=topic,
+        publisher=publisher,
+    )
     save_article(
         title,
         topic,
         content,
         full_link,
-        polarity_score,
-        subjectivity_score,
+        scores,
         published_date=published_date,
         publisher=publisher,
     )
@@ -989,7 +1398,12 @@ def historical_article_item(url, publisher, published_date=None, title=""):
         "url": normalize_cnn_url(url),
         "publisher": publisher,
         "published_date": published_date or article_date_from_url(url),
-        "topic": source_topic_from_url(url, publisher),
+        "topic": normalize_topic(
+            source_topic_from_url(url, publisher),
+            publisher=publisher,
+            url=url,
+            title=title,
+        ),
         "title": fix_text_encoding(title),
         "summary": "",
     }
@@ -1009,9 +1423,10 @@ def is_historical_article_url(url, publisher):
         return hostname == "www.bbc.com" and path.startswith("/news/")
     return True
 
-def article_items_from_sitemaps(sitemap_urls, publisher, target_date, log_callback=None):
+def article_items_from_sitemaps(sitemap_urls, publisher, target_date, log_callback=None, stop_checker=None):
     items = {}
     for sitemap_index, sitemap_url in enumerate(sitemap_urls, start=1):
+        raise_if_stop_requested(stop_checker)
         try:
             if log_callback:
                 log_callback(f"{publisher}: reading sitemap {sitemap_index}/{len(sitemap_urls)}: {sitemap_url}")
@@ -1023,6 +1438,7 @@ def article_items_from_sitemaps(sitemap_urls, publisher, target_date, log_callba
 
         matched_before = len(items)
         for url, row_published_date, row_lastmod, title in rows:
+            raise_if_stop_requested(stop_checker)
             item_date = row_published_date or article_date_from_url(url) or row_lastmod
             if item_date != target_date:
                 continue
@@ -1067,7 +1483,7 @@ def cnn_article_urls_from_sitemap(sitemap_url):
     response.raise_for_status()
     return tuple(xml_locations(response.content))
 
-def discover_cnn_article_urls_for_date(target_date, log_callback=None):
+def discover_cnn_article_urls_for_date(target_date, log_callback=None, stop_checker=None):
     urls = set()
     target_path = f"/{target_date:%Y/%m/%d}/"
     if log_callback:
@@ -1077,6 +1493,7 @@ def discover_cnn_article_urls_for_date(target_date, log_callback=None):
         log_callback(f"Found {len(sitemap_urls)} monthly section sitemaps for {target_date:%Y-%m}.")
 
     for sitemap_index, sitemap_url in enumerate(sitemap_urls, start=1):
+        raise_if_stop_requested(stop_checker)
         try:
             if log_callback:
                 log_callback(f"Reading sitemap {sitemap_index}/{len(sitemap_urls)}: {sitemap_url}")
@@ -1101,9 +1518,13 @@ def discover_cnn_article_urls_for_date(target_date, log_callback=None):
         if url and "/video/" not in url and "/videos/" not in url
     )
 
-def retrieve_cnn_articles_for_date(target_date, limit=None, log_callback=None):
+def retrieve_cnn_articles_for_date(target_date, limit=None, log_callback=None, stop_checker=None):
     stats = empty_fetch_stats(target_date)
-    article_urls = discover_cnn_article_urls_for_date(target_date, log_callback=log_callback)
+    article_urls = discover_cnn_article_urls_for_date(
+        target_date,
+        log_callback=log_callback,
+        stop_checker=stop_checker,
+    )
     stats["discovered"] = len(article_urls)
     stats["sitemaps"] = len(cnn_sitemap_urls_for_month(target_date))
     if log_callback:
@@ -1115,6 +1536,7 @@ def retrieve_cnn_articles_for_date(target_date, limit=None, log_callback=None):
             log_callback(f"Applying per-day limit: processing {len(article_urls)} article URLs.")
 
     for article_index, article_url in enumerate(article_urls, start=1):
+        raise_if_stop_requested(stop_checker)
         try:
             if log_callback:
                 log_callback(f"Fetching article {article_index}/{len(article_urls)}: {article_url}")
@@ -1174,13 +1596,14 @@ def npr_sitemap_urls_for_date(target_date):
         sitemap_urls.append(NPR_NEWS_SITEMAP_URL)
     return sitemap_urls
 
-def guardian_api_items_for_date(target_date, log_callback=None):
+def guardian_api_items_for_date(target_date, log_callback=None, stop_checker=None):
     items = []
     page = 1
     page_size = 50
     total_pages = 1
 
     while page <= total_pages:
+        raise_if_stop_requested(stop_checker)
         response = requests.get(
             GUARDIAN_SEARCH_API_URL,
             headers=REQUEST_HEADERS,
@@ -1207,6 +1630,7 @@ def guardian_api_items_for_date(target_date, log_callback=None):
             )
 
         for result in results:
+            raise_if_stop_requested(stop_checker)
             web_url = result.get("webUrl", "")
             published_date = parse_iso_like_date(result.get("webPublicationDate", ""))
             if not web_url or published_date != target_date:
@@ -1222,7 +1646,12 @@ def guardian_api_items_for_date(target_date, log_callback=None):
                 "url": normalize_cnn_url(web_url),
                 "publisher": "The Guardian",
                 "published_date": published_date,
-                "topic": result.get("sectionId") or source_topic_from_url(web_url, "The Guardian"),
+                "topic": normalize_topic(
+                    result.get("sectionId") or source_topic_from_url(web_url, "The Guardian"),
+                    publisher="The Guardian",
+                    url=web_url,
+                    title=result.get("webTitle", ""),
+                ),
                 "title": fix_text_encoding(result.get("webTitle", "")),
                 "summary": fix_text_encoding(body_text or trail_text),
             })
@@ -1258,14 +1687,18 @@ def bbc_sitemap_urls_for_date(target_date):
 
     return list(dict.fromkeys(urls))
 
-def discover_historical_article_items_for_source(source_config, target_date, log_callback=None):
+def discover_historical_article_items_for_source(source_config, target_date, log_callback=None, stop_checker=None):
     publisher = source_config["name"]
     if source_config["kind"] == "al_jazeera":
         sitemap_urls = al_jazeera_sitemap_urls_for_date(target_date)
     elif source_config["kind"] == "npr":
         sitemap_urls = npr_sitemap_urls_for_date(target_date)
     elif source_config["kind"] == "guardian":
-        items = guardian_api_items_for_date(target_date, log_callback=log_callback)
+        items = guardian_api_items_for_date(
+            target_date,
+            log_callback=log_callback,
+            stop_checker=stop_checker,
+        )
         if log_callback:
             log_callback(
                 f"{publisher}: API matched {len(items)} articles for {target_date.isoformat()}."
@@ -1286,15 +1719,17 @@ def discover_historical_article_items_for_source(source_config, target_date, log
         publisher,
         target_date,
         log_callback=log_callback,
+        stop_checker=stop_checker,
     )
 
-def retrieve_historical_articles_for_source(source_config, target_date, limit=None, log_callback=None):
+def retrieve_historical_articles_for_source(source_config, target_date, limit=None, log_callback=None, stop_checker=None):
     stats = empty_fetch_stats(target_date)
     stats["source"] = source_config["name"]
     article_items = discover_historical_article_items_for_source(
         source_config,
         target_date,
         log_callback=log_callback,
+        stop_checker=stop_checker,
     )
     stats["discovered"] = len(article_items)
 
@@ -1316,6 +1751,7 @@ def retrieve_historical_articles_for_source(source_config, target_date, limit=No
         log_callback(f"{source_config['name']}: discovered {stats['discovered']} article URLs.")
 
     for article_index, item in enumerate(article_items, start=1):
+        raise_if_stop_requested(stop_checker)
         try:
             if log_callback:
                 log_callback(
@@ -1367,7 +1803,7 @@ def combine_fetch_stats(target_date, source_stats):
         stats["last_url"] = current_stats.get("last_url") or stats.get("last_url", "")
     return stats
 
-def retrieve_all_articles_for_date(target_date, limit_per_source=None, log_callback=None):
+def retrieve_all_articles_for_date(target_date, limit_per_source=None, log_callback=None, stop_checker=None):
     source_stats = []
     if log_callback:
         log_callback(
@@ -1376,12 +1812,14 @@ def retrieve_all_articles_for_date(target_date, limit_per_source=None, log_callb
         )
 
     for source_config in HISTORICAL_NEWS_SOURCES:
+        raise_if_stop_requested(stop_checker)
         try:
             if source_config["kind"] == "cnn":
                 current_stats = retrieve_cnn_articles_for_date(
                     target_date,
                     limit=limit_per_source,
                     log_callback=log_callback,
+                    stop_checker=stop_checker,
                 )
                 current_stats["source"] = "CNN"
             else:
@@ -1390,8 +1828,13 @@ def retrieve_all_articles_for_date(target_date, limit_per_source=None, log_callb
                     target_date,
                     limit=limit_per_source,
                     log_callback=log_callback,
+                    stop_checker=stop_checker,
                 )
             source_stats.append(current_stats)
+        except FetchStopRequested:
+            if log_callback:
+                log_callback(f"{source_config['name']} retrieval stopped by request.", "warning")
+            raise
         except Exception as exc:
             current_stats = empty_fetch_stats(target_date)
             current_stats["source"] = source_config["name"]
